@@ -44,23 +44,8 @@ bool operator==(const bitvector& left, const bitvector& right)
 
 ostream& operator<<(ostream& os, const bitvector& d)
 {
-	//просто битовая маска
+	//bit mask
 	for (auto it = d.bits.begin(), e = d.bits.end(); it != e; ++it)
 		os << (int)*it;
-
-	//номер строки и имя переменной
-	/*for (int i = 0; i < d.bits.size(); ++i)
-		if (d.bits[i]) {
-			auto t = all_def[i];
-			os << "[" << get<0>(ins_names[get<0>(t)]) << ", " << var_names[get<1>(t)] << "] ";
-		}*/
-
-	//имя переменной и бб
-	/*for (int i = 0; i < d.bits.size(); ++i)
-		if (d.bits[i]) {
-			auto t = all_def[i];
-			os << "(" << var_names[get<1>(t)] << ", " << bb_names[get<1>(ins_names[get<0>(t)])] << ") ";
-		}*/
-
 	return os;
 }
