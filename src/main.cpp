@@ -1,8 +1,11 @@
 #include <iostream>
+#include <fstream>
 #include <sstream>
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <unistd.h>
+#include <getopt.h>
 #include "bitvector.h"
 
 using namespace std;
@@ -20,7 +23,7 @@ struct ins
 struct bb
 {
     int name_id;
-    bitvector gen, kill, def, use, in_rd, out_rd, in_lv, out_lv;
+    bitvector gen, kill, use, def, in_rd, out_rd, in_lv, out_lv;
     vector<ins> ins_list;
     vector<int> pred, succ;
 };
@@ -92,10 +95,92 @@ public:
     }
 };
 
-int main()
+int main(int argc, char* argv[])
 {
-    //bb input
+    //parse args
+    int print_graph = 0, print_sets = 0, print_serialize = 0, print_rd = 0, print_lv = 0;
+    char *input = NULL, *output = NULL;
+    for (;;) {
+        static struct option longopts[] =
+        {
+            { "help", no_argument, 0, 'h' },
+            { "usage", no_argument, 0, 'u' },
+            { "G", no_argument, &print_graph, 1 },
+            { "sets", no_argument, &print_sets, 1 },
+            { "serialize", no_argument, &print_serialize, 1 },
+            { "RD", no_argument, &print_rd, 1 },
+            { "LV", no_argument, &print_lv, 1 },
+            { 0,0,0,0 }
+        };
+        int optidx = 0;
+        int c = getopt_long_only(argc, argv, "hui:o:", longopts, &optidx);
+        if (c == -1)
+            break;
+        #define all_coms " [-i INPUTFILE] [-o OUTPUTFILE] [-h] [-help] [-u] [-usage] [-G] [-sets] [-serialize] [-RD] [-LV]"
+        switch (c) {
+            case 0:
+                break;
+            case 'h':
+                cerr << "Usage: " << argv[0] << all_coms << "\n"
+                << "Options:\n"
+                << "\t-h,-help\t\tShow this help list\n"
+                << "\t-u,-usage\t\tShow a short usage message\n"
+                << "\t-i <INPUTFILE>\t\tRead from INPUTFILE\n"
+                << "\t-o <OUTPUTFILE>\t\tWrite to OUTPUTFILE\n"
+                << "\t-G\t\t\tPrint digraph for graphviz dot\n"
+                << "\t-sets\t\t\tPrint gen, kill, use, def sets for all BBs\n"
+                << "\t-serialize\t\tPrint serialized info about BBs\n"
+                << "\t-RD\t\t\tPrint reaching definitions analysis\n"
+                << "\t-LV\t\t\tPrint live variable analysis"
+                << endl;
+                return 0;
+            case 'u':
+                cerr << "Usage: " << argv[0] << all_coms << endl;
+                return 0;
+            case 'i':
+                if (input)
+                    cerr << "Warning: set new input file '" << optarg << "'" << endl;
+                input = optarg;
+                break;
+            case 'o':
+                if (output)
+                    cerr << "Warning: set new output file '" << optarg << "'" << endl;
+                output = optarg;
+                break;
+            case '?':
+                cerr << "Try '" << argv[0] << " -help' or '" << argv[0] << " -usage' for more information" << endl;
+                return 1;
+            default:
+                return 1;
+        }
+    }
+    if (!(print_graph || print_sets || print_serialize || print_rd || print_lv)) {
+        cerr << "Error: No any requests (output opts)\nTry '" << argv[0] << " -help' or '" << argv[0] << " -usage' for more information" << endl;
+        return 1;
+    }
+
+    //redirect streams
+    ifstream in;
+    ofstream out;
+    if (input) {
+        in.open(input);
+        cin.rdbuf(in.rdbuf());
+    }
+    if (output) {
+        out.open(output);
+        cout.rdbuf(out.rdbuf());
+    }
+
     vector<bb> bbs;
+
+    //add entry and exit bbs
+    int ENTRY_ID = get_index(bb_names, string("entry"), true);
+    int EXIT_ID = get_index(bb_names, string("exit"), true);
+    bbs.resize(2);
+    bbs[0].name_id = ENTRY_ID;
+    bbs[1].name_id = EXIT_ID;
+
+    //bbs input
     int cur_bb;
     bool fl = true, errfl = false;
     for (string line; fl && getline(cin, line);) {
@@ -167,10 +252,10 @@ int main()
     if (errfl)
         return 1;
 
-    //add exit bb
-    int tmp = get_index(bb_names, string("exit"), true);
-    bbs.resize(tmp + 1);
-    bbs[tmp].name_id = tmp;
+    if (bbs.size() > 2)
+        bbs[0].succ.push_back(2);//First real bb
+    else
+        cerr << "Warning: Empty input code" << endl;
 
     //graph input
     string b1, b2;
@@ -180,6 +265,15 @@ int main()
             return 1;
         bbs[b].pred.push_back(a);
         bbs[a].succ.push_back(b);
+    }
+
+    //print digraph for graphviz dot
+    if (print_graph) {
+        cout << "digraph G {" << endl;
+        for (auto &i : bbs)
+            for (auto &j : i.succ)
+                cout << "	" << bb_names[i.name_id] << " -> " << bb_names[j] << ";" << endl;
+        cout << "}" << endl << endl;
     }
 
     //calculate all definitions vector
@@ -196,6 +290,8 @@ int main()
     for (auto &i : bbs) {
         i.gen = i.kill = i.in_rd = i.out_rd = bitvector(c);
         i.use = i.def = i.in_lv = i.out_lv = bitvector(t);
+        if (i.name_id == ENTRY_ID || i.name_id == EXIT_ID)
+            continue;//sets must be init
          //calculate gen kill
         for (auto j = i.ins_list.rbegin(); j != i.ins_list.rend(); ++j) {
             if (j->l_id < 0) //skip operations without left part
@@ -218,6 +314,8 @@ int main()
             if (j.l_id > -1)
                 i.def[j.l_id] = true;
         }
+        if (print_sets == 0)
+            continue;
         cout << bb_names[i.name_id] << ":" << endl;
         cout << "Gen   : " << print_var_bb_names(i.gen) << endl;
         cout << "Kill  : " << print_var_bb_names(i.kill) << endl;
@@ -226,67 +324,70 @@ int main()
     }
 
     //print information about all bbs
-    cout << "baseBlocks = [" << endl;
-    bool o_tmp1 = false, o_tmp2 = false;
-    for (auto i : bbs) {
-        if (o_tmp1)
-            cout << "," << endl;
-        else
-            o_tmp1 = true;
-        cout << "    {" << endl;
-        cout << "        'letter' : '" << bb_names[i.name_id] << "'," << endl;
-        cout << "        'pred' : [";
-        o_tmp2 = false;
-        for (auto j : i.pred) {
-            if (o_tmp2)
-                cout << ", ";
+    if (print_serialize) {
+        cout << "baseBlocks = [" << endl;
+        bool o_tmp1 = false, o_tmp2 = false;
+        for (auto i : bbs) {
+            if (o_tmp1)
+                cout << "," << endl;
             else
-                o_tmp2 = true;
-            cout << j;
+                o_tmp1 = true;
+            cout << "    {" << endl;
+            cout << "        'letter' : '" << bb_names[i.name_id] << "'," << endl;
+            cout << "        'pred' : [";
+            o_tmp2 = false;
+            for (auto j : i.pred) {
+                if (o_tmp2)
+                    cout << ", ";
+                else
+                    o_tmp2 = true;
+                cout << j;
+            }
+            cout << "]," << endl;
+            cout << "        'succ' : [";
+            o_tmp2 = false;
+            for (auto j : i.succ) {
+                if (o_tmp2)
+                    cout << ", ";
+                else
+                    o_tmp2 = true;
+                cout << j;
+            }
+            cout << "]," << endl;
+            cout << "        'assign' : [";
+            o_tmp2 = false;
+            for (int j = 0; j < var_names.size(); ++j) {
+                if (i.def[j] == false)
+                    continue;
+                if (o_tmp2)
+                    cout << ", ";
+                else
+                    o_tmp2 = true;
+                cout << "'" << var_names[j] << "'";
+            }
+            cout << "]," << endl;
+            cout << "        'access' : [";
+                    o_tmp2 = false;
+            for (int j = 0; j < var_names.size(); ++j) {
+                if (i.use[j] == false)
+                    continue;
+                if (o_tmp2)
+                    cout << ", ";
+                else
+                    o_tmp2 = true;
+                cout << "'" << var_names[j] << "'";
+            }
+            cout << "]" << endl;
+            cout << "    }";
         }
-        cout << "]," << endl;
-        cout << "        'succ' : [";
-        o_tmp2 = false;
-        for (auto j : i.succ) {
-            if (o_tmp2)
-                cout << ", ";
-            else
-                o_tmp2 = true;
-            cout << j;
-        }
-        cout << "]," << endl;
-        cout << "        'assign' : [";
-        o_tmp2 = false;
-        for (int j = 0; j < var_names.size(); ++j) {
-            if (i.def[j] == false)
-                continue;
-            if (o_tmp2)
-                cout << ", ";
-            else
-                o_tmp2 = true;
-            cout << "'" << var_names[j] << "'";
-        }
-        cout << "]," << endl;
-        cout << "        'access' : [";
-                o_tmp2 = false;
-        for (int j = 0; j < var_names.size(); ++j) {
-            if (i.use[j] == false)
-                continue;
-            if (o_tmp2)
-                cout << ", ";
-            else
-                o_tmp2 = true;
-            cout << "'" << var_names[j] << "'";
-        }
-        cout << "]" << endl;
-        cout << "    }";
+        cout << endl<< "]" << endl << endl;
     }
-    cout << endl<< "]" << endl;
 
     //rd analysis
     bool change = true;
     int iter_num = 0;
-    cout << endl << "RD ALGO:" << endl;
+    if (print_rd)
+        cout << "RD analysis:" << endl;
     while (change) {
         change = false;
         for (auto &i : bbs) {
@@ -299,23 +400,29 @@ int main()
                 change = true;
             }
         }
+        if (print_rd == 0)
+            continue;
         cout << endl << "Iter num: " << ++iter_num << endl;
         for (auto &i : bbs) {
+            if (i.name_id == ENTRY_ID)
+                continue;
             cout << bb_names[i.name_id] << ":" << endl;
             cout << "In_rd : " << print_var_bb_names(i.in_rd) << endl;
             cout << "Out_rd: " << print_var_bb_names(i.out_rd) << endl;
         }
     }
+    if (print_rd)
+        cout << endl;
 
     //lv analysis
     change = true;
     iter_num = 0;
-    int exit_bb_id = get_index(bb_names, string("exit"), false);
-    cout << endl << "LV ALGO:" << endl;
+    if (print_lv)
+        cout << "LV analysis:" << endl;
     while (change) {
         change = false;
         for (auto &i : bbs) {
-            if (i.name_id == exit_bb_id)
+            if (i.name_id == EXIT_ID)
                 continue;
             i.out_lv = bitvector(t);
             for (auto j : i.succ)
@@ -326,8 +433,12 @@ int main()
                 change = true;
             }
         }
+        if (print_lv == 0)
+            continue;
         cout << endl << "Iter num: " << ++iter_num << endl;
         for (auto &i : bbs) {
+            if (i.name_id = ENTRY_ID || i.name_id == EXIT_ID)
+                continue;//sets for this trivial
             cout << bb_names[i.name_id] << ":" << endl;
             cout << "In_lv : " << print_var_names(i.in_lv) << endl;
             cout << "Out_lv: " << print_var_names(i.out_lv) << endl;
