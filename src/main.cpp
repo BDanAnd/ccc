@@ -6,27 +6,52 @@
 #include <algorithm>
 #include <unistd.h>
 #include <getopt.h>
+#include <assert.h>
 #include "bitvector.h"
 
 using namespace std;
 
-vector<string> bb_names;
-vector<string> var_names;
-vector<tuple<string, int> > ins_names;
-vector<tuple<int, int> > all_def;
+enum instype
+{
+    OP, //unary, binary
+    LABEL,
+    IF,
+    ELSE,
+    EXIT_JUMP,
+    LABEL_JUMP
+};
 
 struct ins
 {
-    int ins_id, l_id, r_id1, r_id2;
+    int ins_id;
+    string str, ins_label;
+    instype type;
+    int id, l_id, r_id1, r_id2;
+    int bb_id;
 };
+
+ /*
+instype:   id:
+LABEL      label_id
+LABEL_JUMP label_id
+other      undef (-1)
+*/
 
 struct bb
 {
     int name_id;
+    int first_ins, last_ins;
     bitvector gen, kill, use, def, in_rd, out_rd, in_lv, out_lv;
-    vector<ins> ins_list;
     vector<int> pred, succ;
 };
+
+vector<ins> ins_list;
+vector<string> labels_names;
+vector<string> bb_names;
+vector<string> var_names;
+vector<bb> bbs;
+vector<tuple<int, int> > all_def;
+int ENTRY_ID, EXIT_ID;
 
 template<typename T>
 int get_index(vector<T> &vec, T s, bool add = false)
@@ -58,6 +83,26 @@ bool is_array_element(const string& s, string& k1, string& k2)
     return true;
 }
 
+template <typename T>
+string NumberToString(T Number)
+{
+    ostringstream ss;
+    ss << Number;
+    return ss.str();
+}
+
+int DFST(vector<bool> &a, vector<int>& b, int num = 1)
+{
+    for (auto i : b) {
+        if (a[i])
+            continue;
+        bb_names[i] = string("BB") + NumberToString(num);
+        a[i] = true;
+        num = DFST(a, bbs[i].succ, num + 1);
+    }
+    return num;
+}
+
 class print_var_bb_names
 {
 
@@ -72,7 +117,7 @@ public:
         for (int i = 0; i < all_def.size(); ++i)
             if (mp.c_[i]) {
                 auto t = all_def[i];
-                os << "(" << var_names[get<1>(t)] << ", " << bb_names[get<1>(ins_names[get<0>(t)])] << ") ";
+                os << "(" << var_names[get<1>(t)] << ", " << bb_names[ins_list[get<0>(t)].bb_id] << ") ";
             }
         return os;
     }
@@ -98,7 +143,7 @@ public:
 int main(int argc, char* argv[])
 {
     //parse args
-    int all = 0, print_graph = 0, print_sets = 0, print_serialize = 0, print_rd = 0, print_lv = 0;
+    int all = 0, print_ir = 0, print_graph = 0, print_sets = 0, print_serialize = 0, print_rd = 0, print_lv = 0;
     char *input = NULL, *output = NULL;
     for (;;) {
         static struct option longopts[] =
@@ -106,6 +151,7 @@ int main(int argc, char* argv[])
             { "help", no_argument, 0, 'h' },
             { "usage", no_argument, 0, 'u' },
             { "ALL", no_argument, &all, 1 },
+            { "IR", no_argument, &print_ir, 1 },
             { "G", no_argument, &print_graph, 1 },
             { "sets", no_argument, &print_sets, 1 },
             { "serialize", no_argument, &print_serialize, 1 },
@@ -117,7 +163,7 @@ int main(int argc, char* argv[])
         int c = getopt_long_only(argc, argv, "hui:o:", longopts, &optidx);
         if (c == -1)
             break;
-        #define all_coms " [-i INPUTFILE] [-o OUTPUTFILE] [-h] [-help] [-u] [-usage] [-ALL] [-G] [-sets] [-serialize] [-RD] [-LV]"
+        #define all_coms " [-i INPUTFILE] [-o OUTPUTFILE] [-h] [-help] [-u] [-usage] [-ALL] [-IR] [-G] [-sets] [-serialize] [-RD] [-LV]"
         switch (c) {
             case 0:
                 break;
@@ -129,6 +175,7 @@ int main(int argc, char* argv[])
                 << "\t-i <INPUTFILE>\t\tRead from INPUTFILE\n"
                 << "\t-o <OUTPUTFILE>\t\tWrite to OUTPUTFILE\n"
                 << "\t-ALL\t\t\tPrint all (union of all the following flags)\n"
+                << "\t-IR\t\t\tPrint IR with BB labels\n"
                 << "\t-G\t\t\tPrint digraph for graphviz dot\n"
                 << "\t-sets\t\t\tPrint gen, kill, use, def sets for all BBs\n"
                 << "\t-serialize\t\tPrint serialized info about BBs\n"
@@ -156,12 +203,12 @@ int main(int argc, char* argv[])
                 return 1;
         }
     }
-    if (!(all || print_graph || print_sets || print_serialize || print_rd || print_lv)) {
+    if (!(all || print_ir || print_graph || print_sets || print_serialize || print_rd || print_lv)) {
         cerr << "Error: No any requests (output opts)\nTry '" << argv[0] << " -help' or '" << argv[0] << " -usage' for more information" << endl;
         return 1;
     }
     if (all)
-        print_graph = print_sets = print_serialize = print_rd = print_lv = 1;
+        print_ir = print_graph = print_sets = print_serialize = print_rd = print_lv = 1;
 
     //redirect streams
     ifstream in;
@@ -175,118 +222,205 @@ int main(int argc, char* argv[])
         cout.rdbuf(out.rdbuf());
     }
 
-    vector<bb> bbs;
-
     //add entry and exit bbs
-    int ENTRY_ID = get_index(bb_names, string("entry"), true);
-    int EXIT_ID = get_index(bb_names, string("exit"), true);
+    ENTRY_ID = get_index(bb_names, string("entry"), true);
+    EXIT_ID = get_index(bb_names, string("exit"), true);
     bbs.resize(2);
     bbs[0].name_id = ENTRY_ID;
     bbs[1].name_id = EXIT_ID;
 
-    //bbs input
-    int cur_bb;
-    bool fl = true, errfl = false;
-    for (string line; fl && getline(cin, line);) {
+    //ins input
+    map<int, int> labels_to_ins_id;
+    bool errfl = false;
+    int cur_ins;
+    for (string line; getline(cin, line);) {
+        cur_ins = ins_list.size();
         istringstream iss(line);
         vector<string> tokens{istream_iterator<string>{iss}, istream_iterator<string>{}};
-        if ((tokens.size() > 0 && tokens[0].compare("goto") == 0) || tokens.size() == 2)
-            //tokens.size() == 2 - skip labels, else, ifTrue
-            continue;
         string k1, k2;
         switch (tokens.size()) {
-            case 1:
-                //bb label or transition to graph description
-                if (tokens[0].compare("GRAPH") == 0) {
-                    fl = false;
-                    break;
+            case 0:
+                //empty
+                break;
+            case 2:
+                //else, label or ifTrue without parameters
+                if (tokens[0].compare("else") == 0) {
+                    //ins[cur_ins - 2] must exist and have IF type
+                    if (cur_ins - 2 < 0 || ins_list[cur_ins - 2].type != IF) {
+                        cerr << "Error: unexpected command 'else' in a line '" << line << "'" << endl;
+                        return 1;
+                    }
+                    ins_list.push_back({cur_ins, line, tokens[1], ELSE, -1, -1, -1, -1});
+                } else if (tokens[0].compare("ifTrue") == 0)
+                    ins_list.push_back({cur_ins, line, tokens[1], IF, -1, -1, -1, -1});
+                else {
+                    int tmp;
+                    ins_list.push_back({cur_ins, line, tokens[1], LABEL, tmp = get_index(labels_names, tokens[0], true), -1, -1, -1});
+                    labels_to_ins_id[tmp] = cur_ins;
                 }
-                cur_bb = get_index(bb_names, tokens[0], true);
-                bbs.resize(cur_bb + 1);
-                bbs[cur_bb].name_id = cur_bb;
+                break;
+            case 3:
+                //goto, return
+                if (tokens[0].compare("goto") == 0)
+                    ins_list.push_back({cur_ins, line, tokens[2], LABEL_JUMP, get_index(labels_names, tokens[1], true), -1, -1 , -1});
+                else
+                    ins_list.push_back({cur_ins, line, tokens[2], EXIT_JUMP, -1, -1,
+                                        is_number(tokens[1]) ? -1 : get_index(var_names, tokens[1], true), -1});
                 break;
             case 4:
                 //unary operation
                 if (is_array_element(tokens[0], k1, k2)) //in left part array element k1[k2]
-                bbs[cur_bb].ins_list.push_back({get_index(ins_names, make_tuple(tokens[3], cur_bb), true),
-                                                    is_number(k1) ? -1 : get_index(var_names, k1, true),
-                                                    is_number(k2) ? -1 : get_index(var_names, k2, true),
-                                                    is_number(tokens[2]) ? -1 : get_index(var_names, tokens[2], true)});
+                    ins_list.push_back({cur_ins, line, tokens[3], OP, -1,
+                                        is_number(k1) ? -1 : get_index(var_names, k1, true),
+                                        is_number(k2) ? -1 : get_index(var_names, k2, true),
+                                        is_number(tokens[2]) ? -1 : get_index(var_names, tokens[2], true)});
                 else if (is_array_element(tokens[2], k1, k2)) //in right part array element k1[k2]
-                    bbs[cur_bb].ins_list.push_back({get_index(ins_names, make_tuple(tokens[3], cur_bb), true),
-                                                    get_index(var_names, tokens[0], true),
-                                                    is_number(k1) ? -1 : get_index(var_names, k1, true),
-                                                    is_number(k2) ? -1 : get_index(var_names, k2, true)});
+                    ins_list.push_back({cur_ins, line, tokens[3], OP, -1,
+                                        is_number(tokens[0]) ? -1 : get_index(var_names, tokens[0], true),
+                                        is_number(k1) ? -1 : get_index(var_names, k1, true),
+                                        is_number(k2) ? -1 : get_index(var_names, k2, true)});
                 else
-                    bbs[cur_bb].ins_list.push_back({get_index(ins_names, make_tuple(tokens[3], cur_bb), true),
-                                                    get_index(var_names, tokens[0], true),
-                                                    is_number(tokens[2]) ? -1 : get_index(var_names, tokens[2], true),
-                                                    -1});
-                break;
-            case 6:
-                //binary operation
-                bbs[cur_bb].ins_list.push_back({get_index(ins_names, make_tuple(tokens[5], cur_bb), true),
-                                                get_index(var_names, tokens[0], true),
-                                                is_number(tokens[3]) ? -1 : get_index(var_names, tokens[3], true),
-                                                is_number(tokens[4]) ? -1 : get_index(var_names, tokens[4], true)});
+                    ins_list.push_back({cur_ins, line, tokens[3], OP, -1,
+                                        is_number(tokens[0]) ? -1 : get_index(var_names, tokens[0], true),
+                                        is_number(tokens[2]) ? -1 : get_index(var_names, tokens[2], true),
+                                        -1});
                 break;
             case 5:
                 //ifTrue with 2 variables in condition
-                bbs[cur_bb].ins_list.push_back({get_index(ins_names, make_tuple(tokens[4], cur_bb), true),
-                                                -1,
-                                                is_number(tokens[1]) ? -1 : get_index(var_names, tokens[1], true),
-                                                is_number(tokens[3]) ? -1 : get_index(var_names, tokens[3], true)});
+                ins_list.push_back({cur_ins, line, tokens[4], IF, -1, -1,
+                                    is_number(tokens[1]) ? -1 : get_index(var_names, tokens[1], true),
+                                    is_number(tokens[3]) ? -1 : get_index(var_names, tokens[3], true)});
                 break;
-            case 3:
-                //return command
-                bbs[cur_bb].ins_list.push_back({get_index(ins_names, make_tuple(tokens[2], cur_bb), true),
-                                                -1,
-                                                is_number(tokens[1]) ? -1 : get_index(var_names, tokens[1], true),
-                                                -1});
-                break;
-            case 0:
-                //empty
+            case 6:
+                //binary operation
+                ins_list.push_back({cur_ins, line, tokens[5], OP, -1,
+                                    is_number(tokens[0]) ? -1 : get_index(var_names, tokens[0], true),
+                                    is_number(tokens[3]) ? -1 : get_index(var_names, tokens[3], true),
+                                    is_number(tokens[4]) ? -1 : get_index(var_names, tokens[4], true)});
                 break;
             default:
                 //some error
-                cout << tokens.size() << ":'" << line << "'" << endl;
+                cerr << tokens.size() << ":'" << line << "'" << endl;
                 errfl = true;
         }
     }
     if (errfl)
         return 1;
-
-    if (bbs.size() > 2)
-        bbs[0].succ.push_back(2);//First real bb
-    else
-        cerr << "Warning: Empty input code" << endl;
-
-    //graph input
-    string b1, b2;
-    while (cin >> b1 >> b2) {
-        int a = get_index(bb_names, b1, false), b = get_index(bb_names, b2, false);
-        if (a < 0 || b < 0)
-            return 1;
-        bbs[b].pred.push_back(a);
-        bbs[a].succ.push_back(b);
+    if (ins_list.size() == 0) {
+        cerr << "Error: empty intermediate representation" << endl;
+        return 1;
     }
+
+    //partition into bbs
+    vector<int> leaders;
+    bool next_leader = true;
+    for (auto i : ins_list) {
+        switch (i.type) {
+            case OP:
+            case IF:
+            case LABEL:
+                if (next_leader)
+                    get_index(leaders, i.ins_id, true);
+            case ELSE:
+                next_leader = false;
+                break;
+            case EXIT_JUMP:
+                if (next_leader)
+                    get_index(leaders, i.ins_id, true);
+                next_leader = true;
+                break;
+            case LABEL_JUMP:
+                if (next_leader)
+                    get_index(leaders, i.ins_id, true);
+                else
+                    get_index(leaders, labels_to_ins_id[i.id], true);
+                next_leader = true;
+        }
+    }
+    assert(leaders.size() != 0);
+    sort(leaders.begin(), leaders.end());
+    for (int i = 0; i < leaders.size() - 1; ++i)
+        bbs.push_back({i + 2, leaders[i], leaders[i + 1] - 1});
+    bbs.push_back({leaders.size() + 1, leaders[leaders.size() - 1], ins_list.size() - 1});
+    bbs[ENTRY_ID].succ.push_back(2);//First real bb
+    bbs[2].pred.push_back(ENTRY_ID);
+    for (auto &i : bbs) {
+        if (i.name_id == ENTRY_ID || i.name_id == EXIT_ID)
+            continue;
+        bool fall_through = false;
+        int check_insns[2], check_count = 0;
+        //if (goto|return)
+        if (i.last_ins - 1 >= i.first_ins && ins_list[i.last_ins - 1].type == IF) {
+            check_insns[check_count++] = i.last_ins;
+            fall_through = true;
+        //if (goto|return) else (goto|return)
+        } else if (i.last_ins - 2 >= i.first_ins && ins_list[i.last_ins - 1].type == ELSE) {
+            check_insns[check_count++] = i.last_ins;
+            check_insns[check_count++] = i.last_ins - 2;
+        //(goto|return)
+        } else if (ins_list[i.last_ins].type == EXIT_JUMP || ins_list[i.last_ins].type == LABEL_JUMP)
+            check_insns[check_count++] = i.last_ins;
+        //other
+        else
+            fall_through = true;
+        for (int j = 0; j < check_count; ++j) {
+            if (ins_list[check_insns[j]].type == LABEL_JUMP) {
+                auto k = lower_bound(leaders.begin(), leaders.end(), labels_to_ins_id[ins_list[check_insns[j]].id]) - leaders.begin();
+                i.succ.push_back(k + 2);
+                bbs[k + 2].pred.push_back(i.name_id);
+            } else if (ins_list[check_insns[j]].type == EXIT_JUMP) {
+                i.succ.push_back(EXIT_ID);
+                bbs[EXIT_ID].pred.push_back(i.name_id);
+            }
+        }
+        if (fall_through) {
+            int tmp = i.name_id == bbs.size() - 1 ? EXIT_ID : i.name_id + 1;
+            i.succ.push_back(tmp);
+            bbs[tmp].pred.push_back(i.name_id);
+        }
+    }
+
+    //set BB labels
+    bb_names.resize(bbs.size());
+    vector<bool> visited;
+    visited.assign(bbs.size(), false);
+    visited[ENTRY_ID] = visited[EXIT_ID] = true;
+    DFST(visited, bbs[ENTRY_ID].succ);
+
+    //set bb_id for each ins
+    for (int i = 2; i < bbs.size(); ++i)
+        for (int j = bbs[i].first_ins; j <= bbs[i].last_ins; ++j)
+            ins_list[j].bb_id = bbs[i].name_id;
+
+    //print IR with BBs
+    if (print_ir)
+        for (auto i : bbs) {
+            if (i.name_id == ENTRY_ID || i.name_id == EXIT_ID)
+                continue;
+            cout << bb_names[i.name_id] << endl;
+            for (int j = i.first_ins; j <= i.last_ins; ++j)
+                cout << ins_list[j].str << endl;
+            cout << endl;
+        }
 
     //print digraph for graphviz dot
     if (print_graph) {
         cout << "digraph G {" << endl;
         for (auto &i : bbs)
-            for (auto &j : i.succ)
+            for (auto &j : i.succ) {
                 cout << "	" << bb_names[i.name_id] << " -> " << bb_names[j] << ";" << endl;
+            }
         cout << "}" << endl << endl;
     }
 
     //calculate all definitions vector
     map<int, vector<int> > var_to_ins;
-    for (auto i : bbs)
-        for (auto j : i.ins_list) {
-            get_index(all_def, make_tuple(j.ins_id, j.l_id), true);
-            var_to_ins[j.l_id].push_back(j.ins_id);
-        }
+    for (auto i : ins_list) {
+        if (i.l_id < 0)
+            continue;
+        get_index(all_def, make_tuple(i.ins_id, i.l_id), true);
+        var_to_ins[i.l_id].push_back(i.ins_id);
+    }
 
     //calculate gen kill use def sets
     int c = all_def.size();
@@ -297,26 +431,26 @@ int main(int argc, char* argv[])
         if (i.name_id == ENTRY_ID || i.name_id == EXIT_ID)
             continue;//sets must be init
          //calculate gen kill
-        for (auto j = i.ins_list.rbegin(); j != i.ins_list.rend(); ++j) {
-            if (j->l_id < 0) //skip operations without left part
+        for (auto j = i.last_ins; j >= i.first_ins; --j) {
+            if (ins_list[j].l_id < 0) //skip operations without left part
                 continue;
             bitvector tmp_gen(c);
-            tmp_gen[get_index(all_def, make_tuple(j->ins_id, j->l_id), false)] = true;
+            tmp_gen[get_index(all_def, make_tuple(ins_list[j].ins_id, ins_list[j].l_id), false)] = true;
             i.gen = i.gen + (tmp_gen - i.kill);
-            for (auto k : var_to_ins[j->l_id]) {
-                if (k == j->ins_id)
+            for (auto k : var_to_ins[ins_list[j].l_id]) {
+                if (k == ins_list[j].ins_id)
                         continue;
-                i.kill[get_index(all_def, make_tuple(k, j->l_id), false)] = true;
+                i.kill[get_index(all_def, make_tuple(k, ins_list[j].l_id), false)] = true;
             }
         }
         //calculate use def
-        for (auto j : i.ins_list) {
-            if (j.r_id1 > -1 && i.def[j.r_id1] == false)
-                i.use[j.r_id1] = true;
-            if (j.r_id2 > -1 && i.def[j.r_id2] == false)
-                i.use[j.r_id2] = true;
-            if (j.l_id > -1)
-                i.def[j.l_id] = true;
+        for (auto j = i.first_ins; j <= i.last_ins; ++j) {
+            if (ins_list[j].r_id1 > -1 && i.def[ins_list[j].r_id1] == false)
+                i.use[ins_list[j].r_id1] = true;
+            if (ins_list[j].r_id2 > -1 && i.def[ins_list[j].r_id2] == false)
+                i.use[ins_list[j].r_id2] = true;
+            if (ins_list[j].l_id > -1)
+                i.def[ins_list[j].l_id] = true;
         }
         if (print_sets == 0)
             continue;
@@ -395,6 +529,8 @@ int main(int argc, char* argv[])
     while (change) {
         change = false;
         for (auto &i : bbs) {
+            if (i.name_id == ENTRY_ID)
+                continue;
             i.in_rd = bitvector(c);
             for (auto j : i.pred)
                 i.in_rd = i.in_rd + bbs[j].out_rd;
@@ -408,8 +544,6 @@ int main(int argc, char* argv[])
             continue;
         cout << endl << "Iter num: " << ++iter_num << endl;
         for (auto &i : bbs) {
-            if (i.name_id == ENTRY_ID)
-                continue;
             cout << bb_names[i.name_id] << ":" << endl;
             cout << "In_rd : " << print_var_bb_names(i.in_rd) << endl;
             cout << "Out_rd: " << print_var_bb_names(i.out_rd) << endl;
@@ -441,8 +575,6 @@ int main(int argc, char* argv[])
             continue;
         cout << endl << "Iter num: " << ++iter_num << endl;
         for (auto &i : bbs) {
-            if (i.name_id = ENTRY_ID || i.name_id == EXIT_ID)
-                continue;//sets for this trivial
             cout << bb_names[i.name_id] << ":" << endl;
             cout << "In_lv : " << print_var_names(i.in_lv) << endl;
             cout << "Out_lv: " << print_var_names(i.out_lv) << endl;
