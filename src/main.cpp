@@ -98,13 +98,14 @@ public:
 int main(int argc, char* argv[])
 {
     //parse args
-    int print_graph = 0, print_sets = 0, print_serialize = 0, print_rd = 0, print_lv = 0;
+    int all = 0, print_graph = 0, print_sets = 0, print_serialize = 0, print_rd = 0, print_lv = 0;
     char *input = NULL, *output = NULL;
     for (;;) {
         static struct option longopts[] =
         {
             { "help", no_argument, 0, 'h' },
             { "usage", no_argument, 0, 'u' },
+            { "ALL", no_argument, &all, 1 },
             { "G", no_argument, &print_graph, 1 },
             { "sets", no_argument, &print_sets, 1 },
             { "serialize", no_argument, &print_serialize, 1 },
@@ -116,7 +117,7 @@ int main(int argc, char* argv[])
         int c = getopt_long_only(argc, argv, "hui:o:", longopts, &optidx);
         if (c == -1)
             break;
-        #define all_coms " [-i INPUTFILE] [-o OUTPUTFILE] [-h] [-help] [-u] [-usage] [-G] [-sets] [-serialize] [-RD] [-LV]"
+        #define all_coms " [-i INPUTFILE] [-o OUTPUTFILE] [-h] [-help] [-u] [-usage] [-ALL] [-G] [-sets] [-serialize] [-RD] [-LV]"
         switch (c) {
             case 0:
                 break;
@@ -127,6 +128,7 @@ int main(int argc, char* argv[])
                 << "\t-u,-usage\t\tShow a short usage message\n"
                 << "\t-i <INPUTFILE>\t\tRead from INPUTFILE\n"
                 << "\t-o <OUTPUTFILE>\t\tWrite to OUTPUTFILE\n"
+                << "\t-ALL\t\t\tPrint all (union of all the following flags)\n"
                 << "\t-G\t\t\tPrint digraph for graphviz dot\n"
                 << "\t-sets\t\t\tPrint gen, kill, use, def sets for all BBs\n"
                 << "\t-serialize\t\tPrint serialized info about BBs\n"
@@ -154,10 +156,12 @@ int main(int argc, char* argv[])
                 return 1;
         }
     }
-    if (!(print_graph || print_sets || print_serialize || print_rd || print_lv)) {
+    if (!(all || print_graph || print_sets || print_serialize || print_rd || print_lv)) {
         cerr << "Error: No any requests (output opts)\nTry '" << argv[0] << " -help' or '" << argv[0] << " -usage' for more information" << endl;
         return 1;
     }
+    if (all)
+        print_graph = print_sets = print_serialize = print_rd = print_lv = 1;
 
     //redirect streams
     ifstream in;
