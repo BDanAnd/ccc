@@ -145,7 +145,8 @@ int main(int argc, char* argv[])
     //parse args
     int use_dfst = 0, all = 0, print_ir = 0,
         print_graph = 0, print_sets = 0, print_serialize = 0,
-        print_rd = 0, print_lv = 0, print_io = 0;
+        print_rd = 0, print_lv = 0, print_io = 0,
+        print_dce = 0;
     char *input = NULL, *output = NULL;
     for (;;) {
         static struct option longopts[] =
@@ -161,6 +162,7 @@ int main(int argc, char* argv[])
             { "RD", no_argument, &print_rd, 1 },
             { "LV", no_argument, &print_lv, 1 },
             { "IO", no_argument, &print_io, 1 },
+            { "dce", no_argument, &print_dce, 1 },
             { 0,0,0,0 }
         };
         int optidx = 0;
@@ -169,7 +171,7 @@ int main(int argc, char* argv[])
             break;
 #define all_coms " [-i INPUTFILE] [-o OUTPUTFILE] [-h] \\
 [-help] [-u] [-usage] [-dfst] [-ALL] [-IR] [-G] [-sets] \\
-[-serialize] [-RD] [-LV] [-IO]"
+[-serialize] [-RD] [-LV] [-IO] [-dce]"
         switch (c) {
             case 0:
                 break;
@@ -188,7 +190,8 @@ int main(int argc, char* argv[])
                 << "\t-serialize\t\tPrint serialized info about BBs\n"
                 << "\t-RD\t\t\tPrint reaching definitions analysis\n"
                 << "\t-LV\t\t\tPrint live variable analysis\n"
-                << "\t-IO\t\t\tPrint Input Output sets for all BBs"
+                << "\t-IO\t\t\tPrint Input Output sets for all BBs\n"
+                << "\t-dce\t\t\tPrint IR dead code and IR without dead code"
                 << endl;
                 return 0;
             case 'u':
@@ -211,12 +214,12 @@ int main(int argc, char* argv[])
                 return 1;
         }
     }
-    if (!(all || print_ir || print_graph || print_sets || print_serialize || print_rd || print_lv || print_io)) {
+    if (!(all || print_ir || print_graph || print_sets || print_serialize || print_rd || print_lv || print_io || print_dce)) {
         cerr << "Error: No any requests (output opts)\nTry '" << argv[0] << " -help' or '" << argv[0] << " -usage' for more information" << endl;
         return 1;
     }
     if (all)
-        print_ir = print_graph = print_sets = print_serialize = print_rd = print_lv = print_io = 1;
+        print_ir = print_graph = print_sets = print_serialize = print_rd = print_lv = print_io = print_dce = 1;
 
     //redirect streams
     ifstream in;
@@ -601,5 +604,36 @@ int main(int argc, char* argv[])
             cout << "Input : " << print_var_bb_names(i.in_rd) << endl;
             cout << "Output: " << print_var_names(i.out_lv) << endl << endl;
         }
+
+    //simplest dead code elimination - experimental
+    bitvector use_ins = bitvector(ins_list.size());
+    for (auto i : bbs) {
+        if (i.name_id == ENTRY_ID || i.name_id == EXIT_ID)
+            continue;
+        bitvector tmp = i.out_lv;
+        for (auto j = i.last_ins; j >= i.first_ins; --j) {
+            if (ins_list[j].type != OP)
+                use_ins[j] = true;
+            if (ins_list[j].l_id > -1 && tmp[ins_list[j].l_id]) {
+                use_ins[j] = true;
+                tmp[ins_list[j].l_id] = false;
+            }
+            if (ins_list[j].r_id1 > -1 && use_ins[j])
+                tmp[ins_list[j].r_id1] = true;
+            if (ins_list[j].r_id2 > -1 && use_ins[j])
+                tmp[ins_list[j].r_id2] = true;
+        }
+    }
+    if (print_dce) {
+        cout << "IR dead code:" << endl;
+        for (auto i : ins_list)
+            if (!use_ins[i.ins_id])
+                cout << i.str << endl;
+        cout << endl;
+        cout << "IR without dead code:" << endl;
+        for (auto i : ins_list)
+            if (use_ins[i.ins_id])
+                cout << i.str << endl;
+    }
     return 0;
 }
