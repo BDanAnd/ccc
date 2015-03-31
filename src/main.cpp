@@ -75,7 +75,7 @@ bool is_array_element(const string& s, string& k1, string& k2)
 {
     if (s.empty())
         return false;
-    unsigned a = s.find_first_of("["), b = s.find_last_of("]");
+    auto a = s.find_first_of("["), b = s.find_last_of("]");
     if (a == string::npos || b == string::npos || a == 0 || b < s.size() - 1)
         return false;
     k1 = s.substr(0, a);
@@ -143,13 +143,16 @@ public:
 int main(int argc, char* argv[])
 {
     //parse args
-    int all = 0, print_ir = 0, print_graph = 0, print_sets = 0, print_serialize = 0, print_rd = 0, print_lv = 0;
+    int use_dfst = 0, all = 0, print_ir = 0,
+        print_graph = 0, print_sets = 0, print_serialize = 0,
+        print_rd = 0, print_lv = 0, print_io = 0;
     char *input = NULL, *output = NULL;
     for (;;) {
         static struct option longopts[] =
         {
             { "help", no_argument, 0, 'h' },
             { "usage", no_argument, 0, 'u' },
+            { "dfst", no_argument, &use_dfst, 1 },
             { "ALL", no_argument, &all, 1 },
             { "IR", no_argument, &print_ir, 1 },
             { "G", no_argument, &print_graph, 1 },
@@ -157,13 +160,16 @@ int main(int argc, char* argv[])
             { "serialize", no_argument, &print_serialize, 1 },
             { "RD", no_argument, &print_rd, 1 },
             { "LV", no_argument, &print_lv, 1 },
+            { "IO", no_argument, &print_io, 1 },
             { 0,0,0,0 }
         };
         int optidx = 0;
         int c = getopt_long_only(argc, argv, "hui:o:", longopts, &optidx);
         if (c == -1)
             break;
-        #define all_coms " [-i INPUTFILE] [-o OUTPUTFILE] [-h] [-help] [-u] [-usage] [-ALL] [-IR] [-G] [-sets] [-serialize] [-RD] [-LV]"
+#define all_coms " [-i INPUTFILE] [-o OUTPUTFILE] [-h] \\
+[-help] [-u] [-usage] [-dfst] [-ALL] [-IR] [-G] [-sets] \\
+[-serialize] [-RD] [-LV] [-IO]"
         switch (c) {
             case 0:
                 break;
@@ -174,13 +180,15 @@ int main(int argc, char* argv[])
                 << "\t-u,-usage\t\tShow a short usage message\n"
                 << "\t-i <INPUTFILE>\t\tRead from INPUTFILE\n"
                 << "\t-o <OUTPUTFILE>\t\tWrite to OUTPUTFILE\n"
+                << "\t-dfst\t\t\tUse DFST algorithm for BBs numeration\n"
                 << "\t-ALL\t\t\tPrint all (union of all the following flags)\n"
                 << "\t-IR\t\t\tPrint IR with BB labels\n"
                 << "\t-G\t\t\tPrint digraph for graphviz dot\n"
                 << "\t-sets\t\t\tPrint gen, kill, use, def sets for all BBs\n"
                 << "\t-serialize\t\tPrint serialized info about BBs\n"
                 << "\t-RD\t\t\tPrint reaching definitions analysis\n"
-                << "\t-LV\t\t\tPrint live variable analysis"
+                << "\t-LV\t\t\tPrint live variable analysis\n"
+                << "\t-IO\t\t\tPrint Input Output sets for all BBs"
                 << endl;
                 return 0;
             case 'u':
@@ -203,12 +211,12 @@ int main(int argc, char* argv[])
                 return 1;
         }
     }
-    if (!(all || print_ir || print_graph || print_sets || print_serialize || print_rd || print_lv)) {
+    if (!(all || print_ir || print_graph || print_sets || print_serialize || print_rd || print_lv || print_io)) {
         cerr << "Error: No any requests (output opts)\nTry '" << argv[0] << " -help' or '" << argv[0] << " -usage' for more information" << endl;
         return 1;
     }
     if (all)
-        print_ir = print_graph = print_sets = print_serialize = print_rd = print_lv = 1;
+        print_ir = print_graph = print_sets = print_serialize = print_rd = print_lv = print_io = 1;
 
     //redirect streams
     ifstream in;
@@ -381,11 +389,15 @@ int main(int argc, char* argv[])
     }
 
     //set BB labels
-    bb_names.resize(bbs.size());
-    vector<bool> visited;
-    visited.assign(bbs.size(), false);
-    visited[ENTRY_ID] = visited[EXIT_ID] = true;
-    DFST(visited, bbs[ENTRY_ID].succ);
+    if (use_dfst) {
+        bb_names.resize(bbs.size());
+        vector<bool> visited;
+        visited.assign(bbs.size(), false);
+        visited[ENTRY_ID] = visited[EXIT_ID] = true;
+        DFST(visited, bbs[ENTRY_ID].succ);
+    } else
+        for (int i = 2; i < bbs.size(); ++i)
+            bb_names.push_back(string("BB") + NumberToString(i - 1));
 
     //set bb_id for each ins
     for (int i = 2; i < bbs.size(); ++i)
@@ -407,9 +419,8 @@ int main(int argc, char* argv[])
     if (print_graph) {
         cout << "digraph G {" << endl;
         for (auto &i : bbs)
-            for (auto &j : i.succ) {
+            for (auto &j : i.succ)
                 cout << "	" << bb_names[i.name_id] << " -> " << bb_names[j] << ";" << endl;
-            }
         cout << "}" << endl << endl;
     }
 
@@ -580,5 +591,15 @@ int main(int argc, char* argv[])
             cout << "Out_lv: " << print_var_names(i.out_lv) << endl;
         }
     }
+    if (print_lv)
+        cout << endl;
+
+    //print Input Output sets
+    if (print_io)
+        for (auto &i : bbs) {
+            cout << bb_names[i.name_id] << ":" << endl;
+            cout << "Input : " << print_var_bb_names(i.in_rd) << endl;
+            cout << "Output: " << print_var_names(i.out_lv) << endl << endl;
+        }
     return 0;
 }
