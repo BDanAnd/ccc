@@ -37,6 +37,11 @@ const bitvector operator-(const bitvector& left, const bitvector& right)
 	return bitvector::op(left, right, [](bool a, bool b){return a & ~b;});
 }
 
+const bitvector operator*(const bitvector& left, const bitvector& right)
+{
+	return bitvector::op(left, right, [](bool a, bool b){return a & b;});
+}
+
 bool operator==(const bitvector& left, const bitvector& right)
 {
 	return left.bits == right.bits;

@@ -41,7 +41,7 @@ struct bb
 {
     int name_id;
     int first_ins, last_ins;
-    bitvector gen, kill, use, def, in_rd, out_rd, in_lv, out_lv;
+    bitvector gen, kill, use, def, in_rd, out_rd, in_lv, out_lv, dom;
     vector<int> pred, succ;
 };
 
@@ -103,6 +103,15 @@ int DFST(vector<bool> &a, vector<int>& b, int num = 1)
     return num;
 }
 
+void loops_search(int i, bitvector& a)
+{
+    if (!a[i]) {
+        a[i] = true;
+        for (auto j : bbs[i].pred)
+            loops_search(j, a);
+    }
+}
+
 class print_var_bb_names
 {
 
@@ -140,13 +149,30 @@ public:
     }
 };
 
+class print_bb_names
+{
+
+private:
+    bitvector c_;
+
+public:
+    print_bb_names(bitvector c) : c_(c) {}
+
+    friend std::ostream& operator<<(std::ostream& os, const print_bb_names& mp)
+    {
+        for (int i = 0; i < bb_names.size(); ++i)
+            if (mp.c_[i]) os << bb_names[i] << " ";
+        return os;
+    }
+};
+
 int main(int argc, char* argv[])
 {
     //parse args
     int use_dfst = 0, all = 0, print_ir = 0,
         print_graph = 0, print_sets = 0, print_serialize = 0,
         print_rd = 0, print_lv = 0, print_io = 0,
-        print_dce = 0;
+        print_dce = 0, print_dc = 0, print_nl = 0;
     char *input = NULL, *output = NULL;
     for (;;) {
         static struct option longopts[] =
@@ -163,6 +189,8 @@ int main(int argc, char* argv[])
             { "LV", no_argument, &print_lv, 1 },
             { "IO", no_argument, &print_io, 1 },
             { "dce", no_argument, &print_dce, 1 },
+            { "DC", no_argument, &print_dc, 1 },
+            { "NL", no_argument, &print_nl, 1 },
             { 0,0,0,0 }
         };
         int optidx = 0;
@@ -171,7 +199,7 @@ int main(int argc, char* argv[])
             break;
 #define all_coms " [-i INPUTFILE] [-o OUTPUTFILE] [-h] \\
 [-help] [-u] [-usage] [-dfst] [-ALL] [-IR] [-G] [-sets] \\
-[-serialize] [-RD] [-LV] [-IO] [-dce]"
+[-serialize] [-RD] [-LV] [-IO] [-dce] [-DC] [-NL]"
         switch (c) {
             case 0:
                 break;
@@ -191,7 +219,9 @@ int main(int argc, char* argv[])
                 << "\t-RD\t\t\tPrint reaching definitions analysis\n"
                 << "\t-LV\t\t\tPrint live variable analysis\n"
                 << "\t-IO\t\t\tPrint Input Output sets for all BBs\n"
-                << "\t-dce\t\t\tPrint IR dead code and IR without dead code"
+                << "\t-dce\t\t\tPrint IR dead code and IR without dead code\n"
+                << "\t-DC\t\t\tPrint dominator sets for all BBs\n"
+                << "\t-NL\t\t\tPrint natural loops"
                 << endl;
                 return 0;
             case 'u':
@@ -214,12 +244,12 @@ int main(int argc, char* argv[])
                 return 1;
         }
     }
-    if (!(all || print_ir || print_graph || print_sets || print_serialize || print_rd || print_lv || print_io || print_dce)) {
+    if (!(all || print_ir || print_graph || print_sets || print_serialize || print_rd || print_lv || print_io || print_dce || print_dc || print_nl)) {
         cerr << "Error: No any requests (output opts)\nTry '" << argv[0] << " -help' or '" << argv[0] << " -usage' for more information" << endl;
         return 1;
     }
     if (all)
-        print_ir = print_graph = print_sets = print_serialize = print_rd = print_lv = print_io = print_dce = 1;
+        print_ir = print_graph = print_sets = print_serialize = print_rd = print_lv = print_io = print_dce = print_dc = print_nl = 1;
 
     //redirect streams
     ifstream in;
@@ -634,6 +664,61 @@ int main(int argc, char* argv[])
         for (auto i : ins_list)
             if (use_ins[i.ins_id])
                 cout << i.str << endl;
+        cout << endl;
     }
+
+    //calculate dominator sets
+    int p = bbs.size();
+    (bbs[ENTRY_ID].dom = bitvector(p))[ENTRY_ID] = true;
+    for (auto &i : bbs) {
+        if (i.name_id == ENTRY_ID)
+            continue;
+        i.dom = bitvector(p, true);
+    }
+    change = true;
+    iter_num = 0;
+    if (print_dc)
+        cout << "Dominator computing:" << endl;
+    while (change) {
+        change = false;
+        for (auto &i : bbs) {
+            if (i.name_id == ENTRY_ID)
+                continue;
+            bitvector tmp = bitvector(p, true);
+            for (auto j : i.pred)
+                tmp = tmp * bbs[j].dom;
+            tmp[i.name_id] = true;
+            if (!(tmp == i.dom)) {
+                i.dom = tmp;
+                change = true;
+            }
+        }
+        if (print_dc == 0)
+            continue;
+        cout << endl << "Iter num: " << ++iter_num << endl;
+        for (auto &i : bbs)
+            cout << bb_names[i.name_id] << " dom : " << print_bb_names(i.dom) << endl;
+    }
+    if (print_dc)
+        cout << endl;
+
+    //search natural loops
+    vector<bitvector> natural_loops;
+    for (auto &i : bbs)
+        for (auto &j : i.succ)
+            if (i.dom[j]) {
+                bitvector loop(p, false);
+                loop[j] = true;
+                loops_search(i.name_id, loop);
+                get_index(natural_loops, loop, true);
+            }
+    if (print_nl) {
+        cout << "Natural loops:" << endl;
+        for (auto i : natural_loops)
+            cout << print_bb_names(i) << endl;
+        if (natural_loops.size() == 0)
+            cout << "None" << endl << endl;
+    }
+
     return 0;
 }

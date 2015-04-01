@@ -15,7 +15,7 @@ private:
     vector<bool> bits;
 
 public:
-    bitvector(unsigned a = 0) { bits.assign(a, false); }
+    bitvector(unsigned a = 0, bool b = false) { bits.assign(a, b); }
 
     bitvector(const vector<bool>& a) { bits = a; }
 
@@ -30,6 +30,8 @@ public:
     friend const bitvector operator+(const bitvector& left, const bitvector& right);
 
     friend const bitvector operator-(const bitvector& left, const bitvector& right);
+
+    friend const bitvector operator*(const bitvector& left, const bitvector& right);
 
     friend bool operator==(const bitvector& left, const bitvector& right);
 
