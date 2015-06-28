@@ -36,6 +36,8 @@ public:
     friend bool operator==(const bitvector& left, const bitvector& right);
 
     friend ostream& operator<<(ostream& os, const bitvector& d);
+
+    operator vector<int>();
 };
 
 #endif

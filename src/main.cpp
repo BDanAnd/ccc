@@ -28,6 +28,7 @@ struct ins
     instype type;
     int id, l_id, r_id1, r_id2;
     int bb_id;
+    int old_l_id;
 };
 
  /*
@@ -37,12 +38,21 @@ LABEL_JUMP label_id
 other      undef (-1)
 */
 
+struct phi
+{
+    int var_id, old_id;
+    vector<int> var_ids;
+};
+
 struct bb
 {
     int name_id;
     int first_ins, last_ins;
-    bitvector gen, kill, use, def, in_rd, out_rd, in_lv, out_lv, dom;
+    bitvector gen, kill, use, def, in_rd, out_rd, in_lv, out_lv, dom, df;
     vector<int> pred, succ;
+    int idom;
+    vector<phi> phi_list;
+    vector<int> succdom;
 };
 
 vector<ins> ins_list;
@@ -166,13 +176,53 @@ public:
     }
 };
 
+vector<int> var_counter;
+vector<vector<int> > var_stack;
+
+int newname(int id)
+{
+    int i = var_counter[id];
+    var_counter[id] += 1;
+    var_stack[id].push_back(get_index(var_names, var_names[id] + string("_") + NumberToString(i), true));
+    return var_stack[id].back();
+}
+
+void rename(int bb_id)
+{
+    for (auto &i : bbs[bb_id].phi_list)
+        i.var_id = newname(i.old_id);
+    if (bb_id != ENTRY_ID && bb_id != EXIT_ID)
+        for (int i = bbs[bb_id].first_ins; i <= bbs[bb_id].last_ins; ++i) {
+            if (ins_list[i].r_id1 > -1)
+                ins_list[i].r_id1 = var_stack[ins_list[i].r_id1].back();
+            if (ins_list[i].r_id2 > -1)
+                ins_list[i].r_id2 = var_stack[ins_list[i].r_id2].back();
+            if (ins_list[i].l_id > -1)
+                ins_list[i].l_id = newname(ins_list[i].l_id);
+        }
+    for (auto i : bbs[bb_id].succ)
+        for (auto &j : bbs[i].phi_list)
+            j.var_ids.push_back(var_stack[j.old_id].back());
+    for (auto i : bbs[bb_id].succdom)
+        rename(i);
+    for (auto i : bbs[bb_id].phi_list)
+        var_stack[i.old_id].pop_back();
+    if (bb_id != ENTRY_ID && bb_id != EXIT_ID)
+        for (int i = bbs[bb_id].first_ins; i <= bbs[bb_id].last_ins; ++i)
+            if (ins_list[i].old_l_id > -1)
+                var_stack[ins_list[i].old_l_id].pop_back();
+}
+
 int main(int argc, char* argv[])
 {
     //parse args
     int use_dfst = 0, all = 0, print_ir = 0,
         print_graph = 0, print_sets = 0, print_serialize = 0,
         print_rd = 0, print_lv = 0, print_io = 0,
-        print_dce = 0, print_dc = 0, print_nl = 0;
+        print_dce = 0, print_dc = 0, print_nl = 0,
+
+        print_id = 1, print_df = 1, /*some other flags*/ print_ssa = 1;
+
     char *input = NULL, *output = NULL;
     for (;;) {
         static struct option longopts[] =
@@ -248,6 +298,11 @@ int main(int argc, char* argv[])
         cerr << "Error: No any requests (output opts)\nTry '" << argv[0] << " -help' or '" << argv[0] << " -usage' for more information" << endl;
         return 1;
     }
+    
+//DEBUG
+all = 0;   
+print_id = 0, print_df = 0, print_ssa = 0; 
+    
     if (all)
         print_ir = print_graph = print_sets = print_serialize = print_rd = print_lv = print_io = print_dce = print_dc = print_nl = 1;
 
@@ -432,12 +487,14 @@ int main(int argc, char* argv[])
         for (int i = 2; i < bbs.size(); ++i)
             bb_names.push_back(string("BB") + NumberToString(i - 1));
 
-    //set bb_id for each ins
+    //set bb_id and old_l_id for each ins
     for (int i = 2; i < bbs.size(); ++i)
-        for (int j = bbs[i].first_ins; j <= bbs[i].last_ins; ++j)
+        for (int j = bbs[i].first_ins; j <= bbs[i].last_ins; ++j) {
             ins_list[j].bb_id = bbs[i].name_id;
+            ins_list[j].old_l_id = ins_list[j].l_id;
+        }
 
-    //print IR with BBs
+    //print IR with BB labels
     if (print_ir)
         for (auto i : bbs) {
             if (i.name_id == ENTRY_ID || i.name_id == EXIT_ID)
@@ -697,7 +754,7 @@ int main(int argc, char* argv[])
             continue;
         cout << endl << "Iter num: " << ++iter_num << endl;
         for (auto &i : bbs)
-            cout << bb_names[i.name_id] << " dom : " << print_bb_names(i.dom) << endl;
+            cout << bb_names[i.name_id] << " dom: " << print_bb_names(i.dom) << endl;
     }
     if (print_dc)
         cout << endl;
@@ -717,8 +774,260 @@ int main(int argc, char* argv[])
         for (auto i : natural_loops)
             cout << print_bb_names(i) << endl;
         if (natural_loops.size() == 0)
-            cout << "None" << endl << endl;
+            cout << "None" << endl;
+        cout << endl;
     }
+
+    //calculate immediate dominator
+    if (print_id)
+        cout << "Immediate dominator computing:" << endl;
+    for (auto &i : bbs)
+        i.idom = -1;
+    for (auto &i : bbs) {
+        if (i.name_id == ENTRY_ID)
+            continue;
+        bitvector tmp = i.dom;
+        tmp[i.name_id] = false;
+        vector<int> dom = tmp;
+        for (auto j : dom)
+            if (bbs[j].dom == tmp) {
+                i.idom = j;
+                break;
+            }
+        if (print_id)
+            cout << bb_names[i.name_id] << " idom: " << bb_names[i.idom] << endl;
+    }
+    if (print_id)
+        cout << endl;
+
+    //set succ for dominator tree
+    for (auto i : bbs)
+        if (i.idom > -1)
+            bbs[i.idom].succdom.push_back(i.name_id);
+
+    //calculate dominance frontier
+    for (auto &i : bbs) {
+        i.df = bitvector(p);
+        if (i.pred.size() < 2)
+            continue;
+        for (auto p : i.pred) {
+            int r = p;
+            while (r != i.idom) {
+                bbs[r].df[i.name_id] = true;
+                r = bbs[r].idom;
+            }
+        }
+    }
+    if (print_df) {
+        cout << "Dominance frontier sets:" << endl;
+        for (auto i : bbs)
+            cout << bb_names[i.name_id] << ": " << print_bb_names(i.df) << endl;
+        cout << endl;
+    }
+
+    //calculate globals, blocks sets
+    bitvector globals(t);
+    vector<bitvector> blocks;
+    blocks.assign(t, bitvector(p));
+    for (auto i : bbs) {
+        if (i.name_id == ENTRY_ID || i.name_id ==EXIT_ID)
+            continue;
+        bitvector def_tmp(t);
+        for (int j = i.first_ins; j <= i.last_ins; ++j) {
+            if (ins_list[j].l_id == -1)
+                continue;
+            if (ins_list[j].r_id1 > -1 && def_tmp[ins_list[j].r_id1] == false)
+                globals[ins_list[j].r_id1] = true;
+            if (ins_list[j].r_id2 > -1 && def_tmp[ins_list[j].r_id2] == false)
+                globals[ins_list[j].r_id2] = true;
+            def_tmp[ins_list[j].l_id] = true;
+            blocks[ins_list[j].l_id][i.name_id] = true;
+        }
+    }
+
+    //insert phi
+    for (auto i : (vector<int>)globals) {
+        bitvector worklist = blocks[i];
+        bitvector used_blocks(p);
+        vector<int> tmp = worklist;
+        int k = 1;
+        while (!tmp.empty()) {
+            int b = tmp.front();
+            for (auto d : (vector<int>)bbs[b].df) {
+                if (used_blocks[d])
+                    continue;
+                bbs[d].phi_list.push_back({i, i});
+                used_blocks[d] = worklist[d] = true;
+            }
+            worklist[b] = false;
+            tmp = worklist;
+        }
+    }
+
+    //rename vars
+    var_counter.assign(t, 0);
+    var_stack.resize(t);
+    for (auto i : (vector<int>)bbs[ENTRY_ID].out_lv)
+        newname(i);
+    rename(ENTRY_ID);
+
+    //print semi-pruned SSA form without deadcode
+    if (print_ssa)
+        for (auto i : bbs) {
+            if (i.name_id == ENTRY_ID || i.name_id == EXIT_ID)
+                continue;
+            cout << bb_names[i.name_id] << endl;
+            for (int j = i.first_ins; j <= i.last_ins; ++j)
+                if (ins_list[j].type == LABEL)
+                    cout << ins_list[j].str << endl;
+                else
+                    break;
+            for (auto j : i.phi_list) {
+                    cout << var_names[j.var_id] << " = phi(";
+                    int s = j.var_ids.size();
+                    for (int k = 0; k < s; ++k) {
+                        cout << var_names[j.var_ids[k]];
+                        if (k < s - 1)
+                            cout << ", ";
+                    }
+                    cout << ")" << endl;
+            }
+            for (int j = i.first_ins; j <= i.last_ins; ++j) {
+                if (ins_list[j].type == LABEL)
+                    continue;
+                istringstream iss(ins_list[j].str);
+                vector<string> tokens{istream_iterator<string>{iss}, istream_iterator<string>{}};
+                string k1, k2;
+                switch (ins_list[j].type) {
+                    case EXIT_JUMP:
+                            cout << tokens[0] << " "
+                            << (is_number(tokens[1]) ? tokens[1] : var_names[ins_list[j].r_id1]) << " "
+                            << tokens[2] << endl;
+                            break;
+                    case IF:
+                        cout << tokens[0] << " "
+                        << (is_number(tokens[1]) ? tokens[1] : var_names[ins_list[j].r_id1]) << " "
+                        << tokens[2] << " "
+                        << (is_number(tokens[3]) ? tokens[3] : var_names[ins_list[j].r_id2]) << " "
+                        << tokens[4] << endl;
+                        break;
+                    case OP:
+                        if (tokens.size() == 4) {//unary
+                            if (is_array_element(tokens[0], k1, k2)) //in left part array element k1[k2]
+                                cout << (is_number(k1) ? k1 : var_names[ins_list[j].l_id]) << "["
+                                << (is_number(k2) ? k2 : var_names[ins_list[j].r_id1]) << "] "
+                                << tokens[1] << " "
+                                << (is_number(tokens[2]) ? tokens[2] : var_names[ins_list[j].r_id2]) << " "
+                                << tokens[3] << endl;
+                            else if (is_array_element(tokens[2], k1, k2)) //in right part array element k1[k2]
+                                cout << (is_number(tokens[0]) ? tokens[0] : var_names[ins_list[j].l_id]) << " "
+                                << tokens[1] << " "
+                                << (is_number(k1) ? k1 : var_names[ins_list[j].r_id1]) << "["
+                                << (is_number(k2) ? k2 : var_names[ins_list[j].r_id2]) << "] "
+                                << tokens[3] << endl;
+                            else
+                                cout << (is_number(tokens[0]) ? tokens[0] : var_names[ins_list[j].l_id]) << " "
+                                << tokens[1] << " "
+                                << (is_number(tokens[2]) ? tokens[2] : var_names[ins_list[j].r_id1]) << " "
+                                << tokens[3] << endl;
+                        } else //binary
+                            cout << (is_number(tokens[0]) ? tokens[0] : var_names[ins_list[j].l_id]) << " "
+                                << tokens[1] << " " << tokens[2] << " "
+                                << (is_number(tokens[3]) ? tokens[3] : var_names[ins_list[j].r_id1]) << " "
+                                << (is_number(tokens[4]) ? tokens[4] : var_names[ins_list[j].r_id2]) << " "
+                                << tokens[5] << endl;
+                        break;
+                    default:
+                        cout << ins_list[j].str << endl;
+                }
+            }
+            cout << endl;
+        }
+
+//TEX format
+cout << "\\documentclass{article}\n\\usepackage{amsmath}\n\\usepackage[left=25mm, top=5mm, right=90mm, bottom=5mm, nohead, nofoot]{geometry}\n\\begin{document}\n";
+    if (1)
+        for (auto i : bbs) {
+            if (i.name_id == ENTRY_ID || i.name_id == EXIT_ID)
+                continue;
+            cout << bb_names[i.name_id] << endl << endl;
+            for (int j = i.first_ins; j <= i.last_ins; ++j) {
+                istringstream iss(ins_list[j].str);
+                vector<string> tokens{istream_iterator<string>{iss}, istream_iterator<string>{}};
+                if (ins_list[j].type == LABEL)
+                    cout << "\\textbf{" << tokens[0] << ":" << "\\hfill{" << tokens[1] << "}}" << endl << endl;
+                else
+                    break;
+            }
+            for (auto j : i.phi_list) {
+                    cout << "\\(" << var_names[j.var_id] << " = \\phi(";
+                    int s = j.var_ids.size();
+                    for (int k = 0; k < s; ++k) {
+                        cout << var_names[j.var_ids[k]];
+                        if (k < s - 1)
+                            cout << ", ";
+                    }
+                    cout << ")\\)" << endl << endl;
+            }
+            for (int j = i.first_ins; j <= i.last_ins; ++j) {
+                if (ins_list[j].type == LABEL)
+                    continue;
+                istringstream iss(ins_list[j].str);
+                vector<string> tokens{istream_iterator<string>{iss}, istream_iterator<string>{}};
+                string k1, k2;
+                switch (ins_list[j].type) {
+                    case EXIT_JUMP:
+                            cout << tokens[0] << " \\("
+                            << (is_number(tokens[1]) ? tokens[1] : var_names[ins_list[j].r_id1]) << "\\hfill{"
+                            << tokens[2] << "}\\)" << endl << endl;
+                            break;
+                    case IF:
+                        cout << tokens[0] << " \\("
+                        << (is_number(tokens[1]) ? tokens[1] : var_names[ins_list[j].r_id1]) << " "
+                        << tokens[2] << " "
+                        << (is_number(tokens[3]) ? tokens[3] : var_names[ins_list[j].r_id2]) << " "
+                        << "\\hfill{" << tokens[4] << "}\\)" << endl << endl;
+                        break;
+                    case OP:
+                        if (tokens.size() == 4) {//unary
+                            if (is_array_element(tokens[0], k1, k2)) //in left part array element k1[k2]
+                                cout << "\\(" << (is_number(k1) ? k1 : var_names[ins_list[j].l_id]) << "["
+                                << (is_number(k2) ? k2 : var_names[ins_list[j].r_id1]) << "] "
+                                << tokens[1] << " "
+                                << (is_number(tokens[2]) ? tokens[2] : var_names[ins_list[j].r_id2]) << " "
+                                << "\\hfill{" << tokens[3] << "}\\)" << endl << endl;
+                            else if (is_array_element(tokens[2], k1, k2)) //in right part array element k1[k2]
+                                cout << "\\(" << (is_number(tokens[0]) ? tokens[0] : var_names[ins_list[j].l_id]) << " "
+                                << tokens[1] << " "
+                                << (is_number(k1) ? k1 : var_names[ins_list[j].r_id1]) << "["
+                                << (is_number(k2) ? k2 : var_names[ins_list[j].r_id2]) << "] "
+                                << "\\hfill{" << tokens[3] << "}\\)" << endl << endl;
+                            else
+                                cout << "\\(" << (is_number(tokens[0]) ? tokens[0] : var_names[ins_list[j].l_id]) << " "
+                                << tokens[1] << " "
+                                << (is_number(tokens[2]) ? tokens[2] : var_names[ins_list[j].r_id1]) << " "
+                                << "\\hfill{" << tokens[3] << "}\\)" << endl << endl;
+                        } else //binary
+                            cout << "\\(" << (is_number(tokens[0]) ? tokens[0] : var_names[ins_list[j].l_id]) << " "
+                                << tokens[1] << " " << tokens[2] << ",\\ "
+                                << (is_number(tokens[3]) ? tokens[3] : var_names[ins_list[j].r_id1]) << ", "
+                                << (is_number(tokens[4]) ? tokens[4] : var_names[ins_list[j].r_id2]) << " "
+                                << "\\hfill{" << tokens[5] << "}\\)" << endl << endl;
+                        break;
+                    case LABEL_JUMP:
+                        //cout << "\\quad \\textbf{" << ins_list[j].str << "}" << endl << endl;
+                        cout << "\\quad \\textbf{" << tokens[0] << "\\ " << tokens[1] << "\\hfill{" << tokens[2] << "}}" << endl << endl; 
+                        break;
+                    case ELSE:
+                        cout << tokens[0] << "\\hfill{" << tokens[1] << "}" << endl << endl; 
+                        break;
+                    default:
+                        cout << ins_list[j].str << endl << endl;
+                }
+            }
+            cout << "\\vspace{5mm}" << endl << endl;
+        }
+    cout << "\\end{document}" << endl << endl;
 
     return 0;
 }

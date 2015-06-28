@@ -54,3 +54,13 @@ ostream& operator<<(ostream& os, const bitvector& d)
 		os << (int)*it;
 	return os;
 }
+
+bitvector::operator vector<int>()
+{
+    vector<int> tmp;
+    int k = bits.size();
+    for (int i = 0; i < k; ++i)
+        if (bits[i])
+            tmp.push_back(i);
+    return tmp;
+}
