@@ -216,12 +216,9 @@ void rename(int bb_id)
 int main(int argc, char* argv[])
 {
     //parse args
-    int use_dfst = 0, all = 0, print_ir = 0,
-        print_graph = 0, print_sets = 0, print_serialize = 0,
-        print_rd = 0, print_lv = 0, print_io = 0,
-        print_dce = 0, print_dc = 0, print_nl = 0,
-
-        print_id = 1, print_df = 1, /*some other flags*/ print_ssa = 1;
+    int use_dfst = 0, all = 0;
+    #define GENERATE_FLAGS
+    #include "options-wrapper.h"
 
     char *input = NULL, *output = NULL;
     for (;;) {
@@ -231,30 +228,22 @@ int main(int argc, char* argv[])
             { "usage", no_argument, 0, 'u' },
             { "dfst", no_argument, &use_dfst, 1 },
             { "ALL", no_argument, &all, 1 },
-            { "IR", no_argument, &print_ir, 1 },
-            { "G", no_argument, &print_graph, 1 },
-            { "sets", no_argument, &print_sets, 1 },
-            { "serialize", no_argument, &print_serialize, 1 },
-            { "RD", no_argument, &print_rd, 1 },
-            { "LV", no_argument, &print_lv, 1 },
-            { "IO", no_argument, &print_io, 1 },
-            { "dce", no_argument, &print_dce, 1 },
-            { "DC", no_argument, &print_dc, 1 },
-            { "NL", no_argument, &print_nl, 1 },
-            { 0,0,0,0 }
+            #define GENERATE_OPTIONS
+            #include "options-wrapper.h"
+            { 0, 0, 0, 0 }
         };
         int optidx = 0;
         int c = getopt_long_only(argc, argv, "hui:o:", longopts, &optidx);
         if (c == -1)
             break;
-#define all_coms " [-i INPUTFILE] [-o OUTPUTFILE] [-h] \\
-[-help] [-u] [-usage] [-dfst] [-ALL] [-IR] [-G] [-sets] \\
-[-serialize] [-RD] [-LV] [-IO] [-dce] [-DC] [-NL]"
         switch (c) {
             case 0:
                 break;
             case 'h':
-                cerr << "Usage: " << argv[0] << all_coms << "\n"
+                cerr << "Usage: " << argv[0] <<
+                #define GENERATE_USAGE
+                #include "options-wrapper.h"
+                << "\n"
                 << "Options:\n"
                 << "\t-h,-help\t\tShow this help list\n"
                 << "\t-u,-usage\t\tShow a short usage message\n"
@@ -262,20 +251,15 @@ int main(int argc, char* argv[])
                 << "\t-o <OUTPUTFILE>\t\tWrite to OUTPUTFILE\n"
                 << "\t-dfst\t\t\tUse DFST algorithm for BBs numeration\n"
                 << "\t-ALL\t\t\tPrint all (union of all the following flags)\n"
-                << "\t-IR\t\t\tPrint IR with BB labels\n"
-                << "\t-G\t\t\tPrint digraph for graphviz dot\n"
-                << "\t-sets\t\t\tPrint gen, kill, use, def sets for all BBs\n"
-                << "\t-serialize\t\tPrint serialized info about BBs\n"
-                << "\t-RD\t\t\tPrint reaching definitions analysis\n"
-                << "\t-LV\t\t\tPrint live variable analysis\n"
-                << "\t-IO\t\t\tPrint Input Output sets for all BBs\n"
-                << "\t-dce\t\t\tPrint IR dead code and IR without dead code\n"
-                << "\t-DC\t\t\tPrint dominator sets for all BBs\n"
-                << "\t-NL\t\t\tPrint natural loops"
+                #define GENERATE_HELP
+                #include "options-wrapper.h"
                 << endl;
                 return 0;
             case 'u':
-                cerr << "Usage: " << argv[0] << all_coms << endl;
+                cerr << "Usage: " << argv[0] <<
+                #define GENERATE_USAGE
+                #include "options-wrapper.h"
+                << endl;
                 return 0;
             case 'i':
                 if (input)
@@ -294,17 +278,18 @@ int main(int argc, char* argv[])
                 return 1;
         }
     }
-    if (!(all || print_ir || print_graph || print_sets || print_serialize || print_rd || print_lv || print_io || print_dce || print_dc || print_nl)) {
+    if (!(all
+        #define GENERATE_OR_FLAGS
+        #include "options-wrapper.h"
+        )) {
         cerr << "Error: No any requests (output opts)\nTry '" << argv[0] << " -help' or '" << argv[0] << " -usage' for more information" << endl;
         return 1;
     }
-    
-//DEBUG
-all = 0;   
-print_id = 0, print_df = 0, print_ssa = 0; 
-    
+
     if (all)
-        print_ir = print_graph = print_sets = print_serialize = print_rd = print_lv = print_io = print_dce = print_dc = print_nl = 1;
+        #define GENERATE_ASSIGN_FLAGS
+        #include "options-wrapper.h"
+        1;
 
     //redirect streams
     ifstream in;
@@ -495,7 +480,7 @@ print_id = 0, print_df = 0, print_ssa = 0;
         }
 
     //print IR with BB labels
-    if (print_ir)
+    if (FLAG_IR)
         for (auto i : bbs) {
             if (i.name_id == ENTRY_ID || i.name_id == EXIT_ID)
                 continue;
@@ -506,7 +491,7 @@ print_id = 0, print_df = 0, print_ssa = 0;
         }
 
     //print digraph for graphviz dot
-    if (print_graph) {
+    if (FLAG_G) {
         cout << "digraph G {" << endl;
         for (auto &i : bbs)
             for (auto &j : i.succ)
@@ -553,7 +538,7 @@ print_id = 0, print_df = 0, print_ssa = 0;
             if (ins_list[j].l_id > -1)
                 i.def[ins_list[j].l_id] = true;
         }
-        if (print_sets == 0)
+        if (FLAG_sets == 0)
             continue;
         cout << bb_names[i.name_id] << ":" << endl;
         cout << "Gen   : " << print_var_bb_names(i.gen) << endl;
@@ -563,7 +548,7 @@ print_id = 0, print_df = 0, print_ssa = 0;
     }
 
     //print information about all bbs
-    if (print_serialize) {
+    if (FLAG_serialize) {
         cout << "baseBlocks = [" << endl;
         bool o_tmp1 = false, o_tmp2 = false;
         for (auto i : bbs) {
@@ -625,7 +610,7 @@ print_id = 0, print_df = 0, print_ssa = 0;
     //rd analysis
     bool change = true;
     int iter_num = 0;
-    if (print_rd)
+    if (FLAG_RD)
         cout << "RD analysis:" << endl;
     while (change) {
         change = false;
@@ -641,7 +626,7 @@ print_id = 0, print_df = 0, print_ssa = 0;
                 change = true;
             }
         }
-        if (print_rd == 0)
+        if (FLAG_RD == 0)
             continue;
         cout << endl << "Iter num: " << ++iter_num << endl;
         for (auto &i : bbs) {
@@ -650,13 +635,13 @@ print_id = 0, print_df = 0, print_ssa = 0;
             cout << "Out_rd: " << print_var_bb_names(i.out_rd) << endl;
         }
     }
-    if (print_rd)
+    if (FLAG_RD)
         cout << endl;
 
     //lv analysis
     change = true;
     iter_num = 0;
-    if (print_lv)
+    if (FLAG_LV)
         cout << "LV analysis:" << endl;
     while (change) {
         change = false;
@@ -672,7 +657,7 @@ print_id = 0, print_df = 0, print_ssa = 0;
                 change = true;
             }
         }
-        if (print_lv == 0)
+        if (FLAG_LV == 0)
             continue;
         cout << endl << "Iter num: " << ++iter_num << endl;
         for (auto &i : bbs) {
@@ -681,11 +666,11 @@ print_id = 0, print_df = 0, print_ssa = 0;
             cout << "Out_lv: " << print_var_names(i.out_lv) << endl;
         }
     }
-    if (print_lv)
+    if (FLAG_LV)
         cout << endl;
 
     //print Input Output sets
-    if (print_io)
+    if (FLAG_IO)
         for (auto &i : bbs) {
             cout << bb_names[i.name_id] << ":" << endl;
             cout << "Input : " << print_var_bb_names(i.in_rd) << endl;
@@ -711,7 +696,7 @@ print_id = 0, print_df = 0, print_ssa = 0;
                 tmp[ins_list[j].r_id2] = true;
         }
     }
-    if (print_dce) {
+    if (FLAG_dce) {
         cout << "IR dead code:" << endl;
         for (auto i : ins_list)
             if (!use_ins[i.ins_id])
@@ -734,7 +719,7 @@ print_id = 0, print_df = 0, print_ssa = 0;
     }
     change = true;
     iter_num = 0;
-    if (print_dc)
+    if (FLAG_DC)
         cout << "Dominator computing:" << endl;
     while (change) {
         change = false;
@@ -750,13 +735,13 @@ print_id = 0, print_df = 0, print_ssa = 0;
                 change = true;
             }
         }
-        if (print_dc == 0)
+        if (FLAG_DC == 0)
             continue;
         cout << endl << "Iter num: " << ++iter_num << endl;
         for (auto &i : bbs)
             cout << bb_names[i.name_id] << " dom: " << print_bb_names(i.dom) << endl;
     }
-    if (print_dc)
+    if (FLAG_DC)
         cout << endl;
 
     //search natural loops
@@ -769,7 +754,7 @@ print_id = 0, print_df = 0, print_ssa = 0;
                 loops_search(i.name_id, loop);
                 get_index(natural_loops, loop, true);
             }
-    if (print_nl) {
+    if (FLAG_NL) {
         cout << "Natural loops:" << endl;
         for (auto i : natural_loops)
             cout << print_bb_names(i) << endl;
@@ -779,7 +764,7 @@ print_id = 0, print_df = 0, print_ssa = 0;
     }
 
     //calculate immediate dominator
-    if (print_id)
+    if (FLAG_ID)
         cout << "Immediate dominator computing:" << endl;
     for (auto &i : bbs)
         i.idom = -1;
@@ -794,10 +779,10 @@ print_id = 0, print_df = 0, print_ssa = 0;
                 i.idom = j;
                 break;
             }
-        if (print_id)
+        if (FLAG_ID)
             cout << bb_names[i.name_id] << " idom: " << bb_names[i.idom] << endl;
     }
-    if (print_id)
+    if (FLAG_ID)
         cout << endl;
 
     //set succ for dominator tree
@@ -818,7 +803,7 @@ print_id = 0, print_df = 0, print_ssa = 0;
             }
         }
     }
-    if (print_df) {
+    if (FLAG_DF) {
         cout << "Dominance frontier sets:" << endl;
         for (auto i : bbs)
             cout << bb_names[i.name_id] << ": " << print_bb_names(i.df) << endl;
@@ -872,7 +857,7 @@ print_id = 0, print_df = 0, print_ssa = 0;
     rename(ENTRY_ID);
 
     //print semi-pruned SSA form without deadcode
-    if (print_ssa)
+    if (FLAG_SSA)
         for (auto i : bbs) {
             if (i.name_id == ENTRY_ID || i.name_id == EXIT_ID)
                 continue;
@@ -1016,10 +1001,10 @@ cout << "\\documentclass{article}\n\\usepackage{amsmath}\n\\usepackage[left=25mm
                         break;
                     case LABEL_JUMP:
                         //cout << "\\quad \\textbf{" << ins_list[j].str << "}" << endl << endl;
-                        cout << "\\quad \\textbf{" << tokens[0] << "\\ " << tokens[1] << "\\hfill{" << tokens[2] << "}}" << endl << endl; 
+                        cout << "\\quad \\textbf{" << tokens[0] << "\\ " << tokens[1] << "\\hfill{" << tokens[2] << "}}" << endl << endl;
                         break;
                     case ELSE:
-                        cout << tokens[0] << "\\hfill{" << tokens[1] << "}" << endl << endl; 
+                        cout << tokens[0] << "\\hfill{" << tokens[1] << "}" << endl << endl;
                         break;
                     default:
                         cout << ins_list[j].str << endl << endl;
