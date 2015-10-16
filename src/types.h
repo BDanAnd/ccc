@@ -79,8 +79,6 @@ struct instruction
     operand ops[3];
 
     int string_num; // line numbers from input
-
-    int label_id[2];
 };
 
 struct basic_block
@@ -88,7 +86,6 @@ struct basic_block
     int name = -1;
     vector<instruction*> ins_list;
     vector<basic_block*> succ, pred; // sets of successor and predecessor
-    int label_id = -1; // fallthrough helper for empty or noncond blocks
 };
 
 struct analysis_state

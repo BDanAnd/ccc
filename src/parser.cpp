@@ -74,11 +74,18 @@ int parse_operation(const string& s, instruction* ins)
     return 1;
 }
 
+struct two
+{
+    int label_id[2];
+};
+
 int parse_input(analysis_state& state)
 {
     int mode = 0; // tracking of multiline instructions
     vector<string> label_str;
     vector<int> active_labels_id;
+    map<instruction*, two> ins_to_label_id;
+    map<basic_block*, int> bb_to_label_id;
     instruction *ins;
     for (string line; getline(cin, line);) {
         istringstream iss(line);
@@ -102,7 +109,8 @@ int parse_input(analysis_state& state)
                     }
                     ins = new instruction;
                     ins->type = LABEL;
-                    ins->label_id[0] = get_index(label_str, tokens[0], true);
+                    //ins->label_id[0] = get_index(label_str, tokens[0], true);
+                    ins_to_label_id[ins].label_id[0] = get_index(label_str, tokens[0], true);
                     state.instructions_list.push_back(ins);
                 }
                 break;
@@ -126,21 +134,21 @@ int parse_input(analysis_state& state)
                         case 0:
                             ins = new instruction;
                             ins->type = UNCOND;
-                            ins->label_id[0] = get_index(label_str, tokens[1], true);
-                            get_index(active_labels_id, ins->label_id[0], true);
+                            ins_to_label_id[ins].label_id[0] = get_index(label_str, tokens[1], true);
+                            get_index(active_labels_id, ins_to_label_id[ins].label_id[0], true);
                             state.instructions_list.push_back(ins);
                             break;
                         case 1:
-                            ins->label_id[0] = get_index(label_str, tokens[1], true); // edit last ifTrue
-                            get_index(active_labels_id, ins->label_id[0], true);
+                            ins_to_label_id[ins].label_id[0] = get_index(label_str, tokens[1], true); // edit last ifTrue
+                            get_index(active_labels_id, ins_to_label_id[ins].label_id[0], true);
                             mode = 2;
                             break;
                         case 2:
                             cerr << tokens.size() << ":'" << line << "' - 'goto' unexpected" << endl;
                             return 1;
                         case 3:
-                            ins->label_id[1] = get_index(label_str, tokens[1], true); // edit last ifTrue
-                            get_index(active_labels_id, ins->label_id[1], true);
+                            ins_to_label_id[ins].label_id[1] = get_index(label_str, tokens[1], true); // edit last ifTrue
+                            get_index(active_labels_id, ins_to_label_id[ins].label_id[1], true);
                             mode = 0;
                     }
                 } else {
@@ -225,7 +233,7 @@ int parse_input(analysis_state& state)
 
     // partition into bbs
     basic_block* cur_bb = new basic_block, tmp_bb;
-    map<int, basic_block*> labels_id_to_bb;
+    map<int, basic_block*> label_id_to_bb;
     int ind;
     bool need_delete_cur_bb = true;
     for (const auto ins : state.instructions_list) {
@@ -244,14 +252,14 @@ int parse_input(analysis_state& state)
                 need_delete_cur_bb = true;
                 break;
             case LABEL:
-                if ((ind = get_index(active_labels_id, ins->label_id[0], false)) > -1) {
+                if (get_index(active_labels_id, ins_to_label_id[ins].label_id[0], false) > -1) {
                     if (!need_delete_cur_bb) {
-                        cur_bb->label_id = active_labels_id[ind];
+                        bb_to_label_id[cur_bb] = ins_to_label_id[ins].label_id[0];
                         state.bb_list.push_back(cur_bb);
                         cur_bb = new basic_block;
                     }
                     need_delete_cur_bb = false;
-                    labels_id_to_bb[active_labels_id[ind]] = cur_bb;
+                    label_id_to_bb[ins_to_label_id[ins].label_id[0]] = cur_bb;
                 }
         }
     }
@@ -272,21 +280,21 @@ int parse_input(analysis_state& state)
     for (auto bb : state.bb_list) {
         int count = bb->ins_list.size();
         if (!count) {
-            if (bb->label_id > -1)
-                bb->succ.push_back(labels_id_to_bb[bb->label_id]);
+            if (bb_to_label_id.find(bb) != bb_to_label_id.end())
+                bb->succ.push_back(label_id_to_bb[bb_to_label_id[bb]]);
         } else {
             switch (bb->ins_list[count - 1]->type) {
                 case UNARY:
                 case BINARY:
-                    if (bb->label_id > -1)
-                        bb->succ.push_back(labels_id_to_bb[bb->label_id]);
+                    if (bb_to_label_id.find(bb) != bb_to_label_id.end())
+                        bb->succ.push_back(label_id_to_bb[bb_to_label_id[bb]]);
                     break;
                 case UNCOND:
-                    bb->succ.push_back(labels_id_to_bb[bb->ins_list[count - 1]->label_id[0]]);
+                    bb->succ.push_back(label_id_to_bb[ins_to_label_id[bb->ins_list[count - 1]].label_id[0]]);
                     break;
                 case COND:
-                    bb->succ.push_back(labels_id_to_bb[bb->ins_list[count - 1]->label_id[0]]);
-                    bb->succ.push_back(labels_id_to_bb[bb->ins_list[count - 1]->label_id[1]]);
+                    bb->succ.push_back(label_id_to_bb[ins_to_label_id[bb->ins_list[count - 1]].label_id[0]]);
+                    bb->succ.push_back(label_id_to_bb[ins_to_label_id[bb->ins_list[count - 1]].label_id[1]]);
                     break;
                 case RETURN:
                     bb->succ.push_back(state.exit_bb);

@@ -2,7 +2,6 @@ cmake_minimum_required( VERSION 2.8.8 )
 
 project( ccc )
 
-set( CMAKE_AUTOMOC TRUE )
 set( CMAKE_INCLUDE_CURRENT_DIR TRUE )
 
 file( GLOB INCLUDES "src/*.h" )
