@@ -226,7 +226,7 @@ int parse_input(analysis_state& state)
     // partition into bbs
     basic_block* cur_bb = new basic_block, tmp_bb;
     map<int, basic_block*> labels_id_to_bb;
-	int ind;
+    int ind;
     bool need_delete_cur_bb = true;
     for (const auto ins : state.instructions_list) {
         switch (ins->type) {
@@ -246,12 +246,12 @@ int parse_input(analysis_state& state)
             case LABEL:
                 if ((ind = get_index(active_labels_id, ins->label_id[0], false)) > -1) {
                     if (!need_delete_cur_bb) {
-						cur_bb->label_id = active_labels_id[ind];
+                        cur_bb->label_id = active_labels_id[ind];
                         state.bb_list.push_back(cur_bb);
                         cur_bb = new basic_block;
                     }
                     need_delete_cur_bb = false;
-					labels_id_to_bb[active_labels_id[ind]] = cur_bb;
+                    labels_id_to_bb[active_labels_id[ind]] = cur_bb;
                 }
         }
     }
