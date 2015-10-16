@@ -109,7 +109,6 @@ int parse_input(analysis_state& state)
                     }
                     ins = new instruction;
                     ins->type = LABEL;
-                    //ins->label_id[0] = get_index(label_str, tokens[0], true);
                     ins_to_label_id[ins].label_id[0] = get_index(label_str, tokens[0], true);
                     state.instructions_list.push_back(ins);
                 }
