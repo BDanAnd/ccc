@@ -7,6 +7,8 @@
 #include <getopt.h>
 #include <vector>
 #include <map>
+#include <queue>
+#include <set>
 #include <algorithm>
 #include <iterator>
 #include <string>
@@ -14,9 +16,9 @@
 using namespace std;
 
 enum operand_type {
-    CONST,
-    VAR,
-    ARRAY
+    CONST_OPERAND,
+    VAR_OPERAND,
+    ARRAY_OPERAND
 };
 
 //type != ARRAY -> "subtype" and "b" undefined
@@ -98,6 +100,16 @@ struct analysis_state
 
     basic_block* entry_bb = NULL;
     basic_block* exit_bb = NULL;
+};
+
+typedef int (*func_ptr)(analysis_state&, bool);
+
+struct func_props
+{
+    bool done;
+    bool used;
+    bool need_print;
+    vector<func_ptr> dependences;
 };
 
 #endif // TYPES_H

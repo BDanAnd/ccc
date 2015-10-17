@@ -11,22 +11,34 @@ void free_memory(analysis_state& state)
         delete p;
 }
 
+int check_circular_dependencies(map<func_ptr, func_props>& m, func_ptr p, set<func_ptr> path)
+{
+    if (path.find(p) != path.end())
+        return 1;
+    path.insert(p);
+    for (auto& pt : m[p].dependences) {
+        if (check_circular_dependencies(m, pt, path))
+            return 1;
+    }
+    return 0;
+}
+
 void print_operand(vector<string>& str, operand& op)
 {
     switch (op.type) {
-        case CONST:
+        case CONST_OPERAND:
             cout << op.a;
             break;
-        case VAR:
+        case VAR_OPERAND:
             cout << str[op.a];
             break;
-        case ARRAY:
+        case ARRAY_OPERAND:
             cout << str[op.a] << "[";
             switch (op.subtype) {
-                case CONST:
+                case CONST_OPERAND:
                     cout << op.b << "]";
                     break;
-                case VAR:
+                case VAR_OPERAND:
                     cout << str[op.b] << "]";
             }
     }
@@ -71,7 +83,7 @@ void print_instruction_list(analysis_state& state)
     }
 }
 
-void print_bbs(analysis_state& state)
+int OPTION_IR(analysis_state& state, bool)
 {
     map<basic_block*, string> tmp_names_for_bb;
     int k = 1;
@@ -128,6 +140,19 @@ void print_bbs(analysis_state& state)
             }
         }
     }
+    return 0;
+}
+
+int OPTION_G(analysis_state&, bool)
+{
+    cout << "OPTION_G" << endl;
+    return 0;
+}
+
+int OPTION_FG(analysis_state&, bool)
+{
+    cout << "OPTION_FG" << endl;
+    return 0;
 }
 
 int main(int argc, char* argv[])
@@ -205,9 +230,50 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    print_instruction_list(state);
-    cout << endl;
-    print_bbs(state);
+    // information about all functions (opts and helpers)
+    map<func_ptr, func_props> all_functions;
+    #define GENERATE_FUNCTIONS_PROPS
+    #include "options-wrapper.h"
+
+    // check circular dependences
+    for (auto& func : all_functions) {
+        if (check_circular_dependencies(all_functions, func.first, {})) {
+            cerr << "Error: Circular dependency found" << endl;
+            free_memory(state);
+            return 1;
+        }
+    }
+
+    #define GENERATE_NECESSARY_FUNCTIONS
+    #include "options-wrapper.h"
+    queue<func_ptr> necessary_functions;
+    for (auto& func : all_functions) {
+        if (func.second.used)
+            necessary_functions.push(func.first);
+    }
+
+    // call functions for the selected opts in the right order
+    while (!necessary_functions.empty()) {
+        func_ptr cur_func = necessary_functions.front();
+        necessary_functions.pop();
+        bool can_done = true;
+        for (auto& func : all_functions[cur_func].dependences) {
+            if (!all_functions[func].used) {
+                all_functions[func].used = true;
+                necessary_functions.push(func);
+            }
+            if (!all_functions[func].done)
+                can_done = false;
+        }
+        if (can_done) {
+            if (cur_func(state, all_functions[cur_func].need_print)) {
+                free_memory(state);
+                return 1;
+            }
+            all_functions[cur_func].done = true;
+        } else
+            necessary_functions.push(cur_func);
+    }
 
     free_memory(state);
     return 0;

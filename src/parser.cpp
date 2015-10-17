@@ -44,20 +44,22 @@ int parse_operand(vector<string>& str, const string& s, operand& op)
 {
     string k1, k2;
     if (is_number(s)) {
-        op.type = CONST;
+        op.type = CONST_OPERAND;
         op.a = string_to_number(s);
     } else if (is_array_element(s, k1, k2)) {
-        op.type = ARRAY;
+        if (is_number(k1))
+            return 1;
+        op.type = ARRAY_OPERAND;
         op.a = get_index(str, k1, true);
         if (is_number(k2)) {
-            op.subtype = CONST;
+            op.subtype = CONST_OPERAND;
             op.b = string_to_number(s);
         } else {
-            op.subtype = VAR;
+            op.subtype = VAR_OPERAND;
             op.b = get_index(str, k2, true);
         }
     } else {
-        op.type = VAR;
+        op.type = VAR_OPERAND;
         op.a = get_index(str, s, true);
     }
     return 0;
@@ -228,7 +230,6 @@ int parse_input(analysis_state& state)
     // partition into bbs
     basic_block* cur_bb = new basic_block, tmp_bb;
     map<int, basic_block*> label_id_to_bb;
-    int ind;
     bool need_delete_cur_bb = true;
     for (const auto ins : state.instructions_list) {
         switch (ins->type) {
