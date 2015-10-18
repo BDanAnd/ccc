@@ -258,15 +258,15 @@ int parse_input(analysis_state& state)
                 }
         }
     }
-    if (need_delete_cur_bb) {
+    if (need_delete_cur_bb)
         delete cur_bb;
-    } else {
+    else {
         cur_bb->succ.push_back(state.exit_bb); // last bb -> not complete -> fallthrough
         state.bb_list.push_back(cur_bb);
     }
-    if (state.bb_list.size() > 2) {
+    if (state.bb_list.size() > 2)
         state.entry_bb->succ.push_back(state.bb_list[2]); // fisrt real bb
-    } else {
+    else {
         cerr << "Error: empty list of basic blocks" << endl;
         return 1;
     }
