@@ -221,10 +221,8 @@ int parse_input(analysis_state& state)
 
     // create bbs
     state.entry_bb = new basic_block;
-    state.entry_bb->name = get_index(state.str, string("Entry"), true);
     state.bb_list.push_back(state.entry_bb);
     state.exit_bb = new basic_block;
-    state.exit_bb->name = get_index(state.str, string("Exit"), true);
     state.bb_list.push_back(state.exit_bb);
 
     // partition into bbs

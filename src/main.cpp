@@ -82,19 +82,26 @@ void print_instruction_list(analysis_state& state)
     }
 }
 
+void set_tmp_names_for_bb(analysis_state& state, map<basic_block*, string>& tmp)
+{
+    tmp[state.entry_bb] = string("Entry");
+    tmp[state.exit_bb] = string("Exit");
+    int k = 1;
+    for (auto bb : state.bb_list)
+        if (bb != state.entry_bb && bb != state.exit_bb) {
+            ostringstream ss;
+            ss << "BB" << k++;
+            tmp[bb] = ss.str();
+        }
+}
+
 int OPTION_IR(analysis_state& state, bool b)
 {
     if (!b)
         return 0;
 
     map<basic_block*, string> tmp_names_for_bb;
-    int k = 1;
-    for (auto bb : state.bb_list)
-        if (bb->name < 0) {
-            ostringstream ss;
-            ss << "BB" << k++;
-            tmp_names_for_bb[bb] = ss.str();
-        }
+    set_tmp_names_for_bb(state, tmp_names_for_bb);
 
     for (auto bb : state.bb_list) {
         if (bb == state.entry_bb || bb == state.exit_bb)
@@ -150,13 +157,7 @@ int OPTION_G(analysis_state& state, bool b)
         return 0;
 
     map<basic_block*, string> tmp_names_for_bb;
-    int k = 1;
-    for (auto bb : state.bb_list)
-        if (bb->name < 0) {
-            ostringstream ss;
-            ss << "BB" << k++;
-            tmp_names_for_bb[bb] = ss.str();
-        }
+    set_tmp_names_for_bb(state, tmp_names_for_bb);
 
     cout << "digraph G {" << endl;
     for (auto bb : state.bb_list)
@@ -174,13 +175,7 @@ int OPTION_FG(analysis_state& state, bool b)
         return 0;
 
     map<basic_block*, string> tmp_names_for_bb;
-    int k = 1;
-    for (auto bb : state.bb_list)
-        if (bb->name < 0) {
-            ostringstream ss;
-            ss << "BB" << k++;
-            tmp_names_for_bb[bb] = ss.str();
-        }
+    set_tmp_names_for_bb(state, tmp_names_for_bb);
 
     cout << "digraph G {" << endl << "    node [shape = rectangle]" << endl;
     for (auto bb : state.bb_list) {
