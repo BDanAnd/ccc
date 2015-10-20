@@ -21,7 +21,7 @@
 
 #elif defined(GENERATE_FUNCTIONS_PROPS)
 #define dv ,
-#define DEF(option, opt_help, dependences) all_functions[OPTION_##option] = {false, false, false, dependences};
+#define DEF(option, opt_help, dependences) all_functions[OPTION_##option] = {false, false, false, #option, dependences};
 
 #elif defined(GENERATE_NECESSARY_FUNCTIONS)
 #define DEF(option, opt_help, dependences) if (FLAG_##option) all_functions[OPTION_##option].used = all_functions[OPTION_##option].need_print = true;

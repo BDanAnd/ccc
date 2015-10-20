@@ -2,19 +2,6 @@
 
 using namespace std;
 
-template<typename T>
-int get_index(vector<T> &vec, T s, bool add = false)
-{
-    auto it = find(vec.begin(), vec.end(), s);
-    if (it != vec.end())
-        return it - vec.begin();
-    else if (add) {
-        vec.push_back(s);
-        return vec.size() - 1;
-    } else
-        return -1;
-}
-
 int string_to_number(string s)
 {
     stringstream ss(s);
@@ -69,7 +56,7 @@ int parse_operation(const string& s, instruction* ins)
 {
     for (auto it = operation_type_str.begin() ; it < operation_type_str.end(); ++it) {
         if (*it == s) {
-            ins->subtype = static_cast<operation_type>(it - operation_type_str.begin());
+            ins->exp.type = static_cast<operation_type>(it - operation_type_str.begin());
             return 0;
         }
     }
@@ -119,7 +106,7 @@ int parse_input(analysis_state& state)
                     }
                     ins = new instruction;
                     ins->type = RETURN;
-                    if (parse_operand(state.str, tokens[1], ins->ops[1])) {
+                    if (parse_operand(state.str, tokens[1], ins->exp.ops[0])) {
                         cerr << tokens.size() << ":'" << line << "' - parse error" << endl;
                         delete ins;
                         return 1;
@@ -160,8 +147,8 @@ int parse_input(analysis_state& state)
                 }
                 ins = new instruction;
                 ins->type = UNARY;
-                if (parse_operand(state.str, tokens[0], ins->ops[0]) ||
-                    parse_operand(state.str, tokens[2], ins->ops[1])) {
+                if (parse_operand(state.str, tokens[0], ins->result) ||
+                    parse_operand(state.str, tokens[2], ins->exp.ops[0])) {
                     cerr << tokens.size() << ":'" << line << "' - parse error" << endl;
                     delete ins;
                     return 1;
@@ -176,8 +163,8 @@ int parse_input(analysis_state& state)
                 }
                 ins = new instruction;
                 ins->type = COND;
-                if (parse_operand(state.str, tokens[1], ins->ops[1]) ||
-                    parse_operand(state.str, tokens[3], ins->ops[2]) ||
+                if (parse_operand(state.str, tokens[1], ins->exp.ops[0]) ||
+                    parse_operand(state.str, tokens[3], ins->exp.ops[1]) ||
                     parse_operation(tokens[2], ins)) {
                     cerr << tokens.size() << ":'" << line << "' - parse error" << endl;
                     delete ins;
@@ -194,9 +181,9 @@ int parse_input(analysis_state& state)
                 }
                 ins = new instruction;
                 ins->type = BINARY;
-                if (parse_operand(state.str, tokens[0], ins->ops[0]) ||
-                    parse_operand(state.str, tokens[3], ins->ops[1]) ||
-                    parse_operand(state.str, tokens[4], ins->ops[2]) ||
+                if (parse_operand(state.str, tokens[0], ins->result) ||
+                    parse_operand(state.str, tokens[3], ins->exp.ops[0]) ||
+                    parse_operand(state.str, tokens[4], ins->exp.ops[1]) ||
                     parse_operation(tokens[2], ins)) {
                     cerr << tokens.size() << ":'" << line << "' - parse error" << endl;
                     delete ins;
@@ -234,12 +221,14 @@ int parse_input(analysis_state& state)
             case UNARY:
             case BINARY:
                 cur_bb->ins_list.push_back(ins);
+                ins->owner = cur_bb;
                 need_delete_cur_bb = false;
                 break;
             case COND:
             case UNCOND:
             case RETURN:
                 cur_bb->ins_list.push_back(ins);
+                ins->owner = cur_bb;
                 state.bb_list.push_back(cur_bb);
                 cur_bb = new basic_block;
                 need_delete_cur_bb = true;

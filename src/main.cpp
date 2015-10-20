@@ -43,29 +43,36 @@ void print_operand(vector<string>& str, operand& op)
     }
 }
 
+void print_expression(vector<string>& str, expression& exp)
+{
+    print_operand(str, exp.ops[0]);
+    cout << " " << operation_type_str[exp.type] << " ";
+    print_operand(str, exp.ops[1]);
+}
+
 void print_instruction_list(analysis_state& state)
 {
     for (auto i : state.instructions_list) {
         switch (i->type) {
             case UNARY:
-                print_operand(state.str, i->ops[0]);
+                print_operand(state.str, i->result);
                 cout << " = ";
-                print_operand(state.str, i->ops[1]);
+                print_operand(state.str, i->exp.ops[0]);
                 cout << endl;
                 break;
             case BINARY:
-                print_operand(state.str, i->ops[0]);
+                print_operand(state.str, i->result);
                 cout << " = ";
-                print_operand(state.str, i->ops[1]);
-                cout << " " << operation_type_str[i->subtype] << " ";
-                print_operand(state.str, i->ops[2]);
+                print_operand(state.str, i->exp.ops[0]);
+                cout << " " << operation_type_str[i->exp.type] << " ";
+                print_operand(state.str, i->exp.ops[1]);
                 cout << endl;
                 break;
             case COND:
                 cout << "ifTrue ";
-                print_operand(state.str, i->ops[1]);
-                cout << " " << operation_type_str[i->subtype] << " ";
-                print_operand(state.str, i->ops[2]);
+                print_operand(state.str, i->exp.ops[0]);
+                cout << " " << operation_type_str[i->exp.type] << " ";
+                print_operand(state.str, i->exp.ops[1]);
                 cout << endl << "goto BBx" << endl << "else" << endl << "goto BBx" << endl;
                 break;
             case UNCOND:
@@ -76,7 +83,7 @@ void print_instruction_list(analysis_state& state)
                 break;
             case RETURN:
                 cout << "return ";
-                print_operand(state.str, i->ops[1]);
+                print_operand(state.str, i->exp.ops[0]);
                 cout << endl;
         }
     }
@@ -95,6 +102,93 @@ void set_tmp_names_for_bb(analysis_state& state, map<basic_block*, string>& tmp)
         }
 }
 
+int OPTION_SETS(analysis_state& state, bool b)
+{
+    map<basic_block*, string> tmp_names_for_bb;
+    if (b)
+        set_tmp_names_for_bb(state, tmp_names_for_bb);
+
+    // calculate definitions and expressions
+    map<int, vector<instruction*> > var_to_ins_list;
+    map<int, vector<int> > var_to_exp_list;
+    for (auto ins : state.instructions_list)
+        if (ins->type == UNARY || ins->type == BINARY) {
+            get_index(state.definitions, ins, true);
+            var_to_ins_list[ins->result.a].push_back(ins);
+            if (ins->type == BINARY)
+                get_index(state.expressions, ins->exp, true);
+        }
+
+    int def_count = state.definitions.size();
+    int exp_count = state.expressions.size();
+    for (int i = 0; i < exp_count; ++i) {
+        var_to_exp_list[state.expressions[i].ops[0].a].push_back(i);
+        var_to_exp_list[state.expressions[i].ops[1].a].push_back(i);
+    }
+    for (auto bb : state.bb_list) {
+        bb->gen = bb->kill = bitvector(def_count);
+        bb->e_gen = bb->e_kill = bb->e_in = bb->e_out = bitvector(exp_count);
+        if (bb == state.entry_bb|| bb == state.exit_bb)
+            continue;
+        // calculate gen kill sets
+        for (auto ins_it = bb->ins_list.rbegin(); ins_it != bb->ins_list.rend(); ++ins_it) {
+            if ((*ins_it)->type != UNARY && (*ins_it)->type != BINARY)
+                continue;
+            bitvector tmp_gen(def_count);
+            tmp_gen[get_index(state.definitions, *ins_it, false)] = true;
+            bb->gen = bb->gen + (tmp_gen - bb->kill);
+            for (auto ins : var_to_ins_list[(*ins_it)->result.a]) {
+                if (ins == *ins_it)
+                    continue;
+                bb->kill[get_index(state.definitions, ins, false)] = true;
+            }
+        }
+        // calculate e_gen e_kill sets
+        for (auto ins : bb->ins_list)
+            switch(ins->type) {
+                case BINARY:
+                    bb->e_gen[get_index(state.expressions, ins->exp, false)] = true;
+                case UNARY:
+                    for (auto ind : var_to_exp_list[ins->result.a]) {
+                        bb->e_gen[ind] = false;
+                        bb->e_kill[ind] = true;
+                    }
+            }
+        if (!b)
+            continue;
+        cout << BB_NAME(bb) << ":" << endl;
+        cout << "Gen    : ";
+        for (int i = 0; i < def_count; ++i)
+            if (bb->gen[i])
+                cout << "(" << state.str[state.definitions[i]->result.a] << ", " <<
+                    BB_NAME(state.definitions[i]->owner) << ") ";
+        cout << endl;
+        cout << "Kill   : ";
+        for (int i = 0; i < def_count; ++i)
+            if (bb->kill[i])
+                cout << "(" << state.str[state.definitions[i]->result.a] << ", " <<
+                    BB_NAME(state.definitions[i]->owner) << ") ";
+        cout << endl;
+        cout << "e_Gen  : ";
+        for (int i = 0; i < exp_count; ++i)
+            if (bb->e_gen[i]) {
+                cout << "(";
+                print_expression(state.str, state.expressions[i]);
+                cout << ") ";
+            }
+        cout << endl;
+        cout << "e_Kill : ";
+        for (int i = 0; i < exp_count; ++i)
+            if (bb->e_kill[i]) {
+                cout << "(";
+                print_expression(state.str, state.expressions[i]);
+                cout << ") ";
+            }
+        cout << endl << endl;
+    }
+    return 0;
+}
+
 int OPTION_IR(analysis_state& state, bool b)
 {
     if (!b)
@@ -106,44 +200,37 @@ int OPTION_IR(analysis_state& state, bool b)
     for (auto bb : state.bb_list) {
         if (bb == state.entry_bb || bb == state.exit_bb)
             continue;
-        cout << ((bb->name < 0) ? tmp_names_for_bb[bb] : state.str[bb->name]) << ":" << endl;
+        cout << BB_NAME(bb) << ":" << endl;
         for (auto i : bb->ins_list) {
             switch (i->type) {
                 case UNARY:
-                    print_operand(state.str, i->ops[0]);
+                    print_operand(state.str, i->result);
                     cout << " = ";
-                    print_operand(state.str, i->ops[1]);
+                    print_operand(state.str, i->exp.ops[0]);
                     cout << endl;
                     break;
                 case BINARY:
-                    print_operand(state.str, i->ops[0]);
+                    print_operand(state.str, i->result);
                     cout << " = ";
-                    print_operand(state.str, i->ops[1]);
-                    cout << " " << operation_type_str[i->subtype] << " ";
-                    print_operand(state.str, i->ops[2]);
+                    print_operand(state.str, i->exp.ops[0]);
+                    cout << " " << operation_type_str[i->exp.type] << " ";
+                    print_operand(state.str, i->exp.ops[1]);
                     cout << endl;
                     break;
                 case COND:
                     cout << "ifTrue ";
-                    print_operand(state.str, i->ops[1]);
-                    cout << " " << operation_type_str[i->subtype] << " ";
-                    print_operand(state.str, i->ops[2]);
-                    cout << endl <<
-                    "goto " <<
-                    ((bb->succ[0]->name < 0) ? tmp_names_for_bb[bb->succ[0]] : state.str[bb->succ[0]->name])
-                    << endl << "else" << endl <<
-                    "goto " <<
-                    ((bb->succ[1]->name < 0) ? tmp_names_for_bb[bb->succ[1]] : state.str[bb->succ[1]->name])
-                    << endl;
+                    print_operand(state.str, i->exp.ops[0]);
+                    cout << " " << operation_type_str[i->exp.type] << " ";
+                    print_operand(state.str, i->exp.ops[1]);
+                    cout << endl << "goto " << BB_NAME(bb->succ[0]) << endl
+                        << "else" << endl << "goto " << BB_NAME(bb->succ[1]) << endl;
                     break;
                 case UNCOND:
-                    cout << "goto " <<
-                    ((bb->succ[0]->name < 0) ? tmp_names_for_bb[bb->succ[0]] : state.str[bb->succ[0]->name])
-                    << endl;
+                    cout << "goto " << BB_NAME(bb->succ[0]) << endl;
                     break;
                 case RETURN:
                     cout << "return ";
-                    print_operand(state.str, i->ops[1]);
+                    print_operand(state.str, i->exp.ops[0]);
                     cout << endl;
             }
         }
@@ -162,9 +249,7 @@ int OPTION_G(analysis_state& state, bool b)
     cout << "digraph G {" << endl;
     for (auto bb : state.bb_list)
         for (auto bs : bb->succ)
-            cout << "    " <<
-                ((bb->name < 0) ? tmp_names_for_bb[bb] : state.str[bb->name]) << " -> " <<
-                ((bs->name < 0) ? tmp_names_for_bb[bs] : state.str[bs->name]) << ";" << endl;
+            cout << "    " << BB_NAME(bb) << " -> " << BB_NAME(bs) << ";" << endl;
     cout << "}" << endl;
     return 0;
 }
@@ -180,44 +265,37 @@ int OPTION_FG(analysis_state& state, bool b)
     cout << "digraph G {" << endl << "    node [shape = rectangle]" << endl;
     for (auto bb : state.bb_list) {
         cout << "    " << (unsigned long) bb << " [label=\"";
-        cout << ((bb->name < 0) ? tmp_names_for_bb[bb] : state.str[bb->name]) << "\\n";
+        cout << BB_NAME(bb) << "\\n";
         for (auto i : bb->ins_list) {
             switch (i->type) {
                 case UNARY:
-                    print_operand(state.str, i->ops[0]);
+                    print_operand(state.str, i->result);
                     cout << " = ";
-                    print_operand(state.str, i->ops[1]);
+                    print_operand(state.str, i->exp.ops[0]);
                     cout << "\\n";
                     break;
                 case BINARY:
-                    print_operand(state.str, i->ops[0]);
+                    print_operand(state.str, i->result);
                     cout << " = ";
-                    print_operand(state.str, i->ops[1]);
-                    cout << " " << operation_type_str[i->subtype] << " ";
-                    print_operand(state.str, i->ops[2]);
+                    print_operand(state.str, i->exp.ops[0]);
+                    cout << " " << operation_type_str[i->exp.type] << " ";
+                    print_operand(state.str, i->exp.ops[1]);
                     cout << "\\n";
                     break;
                 case COND:
                     cout << "ifTrue ";
-                    print_operand(state.str, i->ops[1]);
-                    cout << " " << operation_type_str[i->subtype] << " ";
-                    print_operand(state.str, i->ops[2]);
-                    cout << "\\n" <<
-                    "goto " <<
-                    ((bb->succ[0]->name < 0) ? tmp_names_for_bb[bb->succ[0]] : state.str[bb->succ[0]->name])
-                    << "\\nelse\\n" <<
-                    "goto " <<
-                    ((bb->succ[1]->name < 0) ? tmp_names_for_bb[bb->succ[1]] : state.str[bb->succ[1]->name])
-                    << "\\n";
+                    print_operand(state.str, i->exp.ops[0]);
+                    cout << " " << operation_type_str[i->exp.type] << " ";
+                    print_operand(state.str, i->exp.ops[1]);
+                    cout << "\\ngoto " << BB_NAME(bb->succ[0]) <<
+                        "\\nelse\\ngoto " << BB_NAME(bb->succ[1]) << "\\n";
                     break;
                 case UNCOND:
-                    cout << "goto " <<
-                    ((bb->succ[0]->name < 0) ? tmp_names_for_bb[bb->succ[0]] : state.str[bb->succ[0]->name])
-                    << "\\n";
+                    cout << "goto " << BB_NAME(bb->succ[0]) << "\\n";
                     break;
                 case RETURN:
                     cout << "return ";
-                    print_operand(state.str, i->ops[1]);
+                    print_operand(state.str, i->exp.ops[0]);
                     cout << "\\n";
             }
         }
@@ -228,6 +306,143 @@ int OPTION_FG(analysis_state& state, bool b)
             cout << "    " << (unsigned long) bb << " -> " << (unsigned long) bs <<
                 ((bb == bs) ? " [dir=back];" : ";") << endl;
     cout << "}" << endl;
+    return 0;
+}
+
+int OPTION_AE(analysis_state& state, bool b)
+{
+    map<basic_block*, string> tmp_names_for_bb;
+    if (b)
+        set_tmp_names_for_bb(state, tmp_names_for_bb);
+
+    int exp_count = state.expressions.size();
+    for (auto bb : state.bb_list) {
+        if (bb == state.entry_bb)
+            continue;
+        bb->e_out = bitvector(exp_count, true) - bb->e_kill;
+    }
+    bool change = true;
+    int iter_num = 0;
+    while (change) {
+        change = false;
+        for (auto bb : state.bb_list) {
+            if (bb == state.entry_bb)
+                continue;
+            bb->e_in = bitvector(exp_count, true);
+            for (auto bbp : bb->pred)
+                bb->e_in = bb->e_in * bbp->e_out;
+            if (bb->pred.empty())
+                bb->e_in = bitvector(exp_count, false);
+            bitvector out_new = bb->e_gen + (bb->e_in - bb->e_kill);
+            if (!(out_new == bb->e_out)) {
+                bb->e_out = out_new;
+                change = true;
+            }
+        }
+        if (!b)
+            continue;
+        cout << endl << "Iter num: " << ++iter_num << endl;
+        for (auto bb : state.bb_list) {
+            cout << BB_NAME(bb) << ":" << endl;
+            cout << "e_In  : ";
+            for (int i = 0; i < exp_count; ++i)
+                if (bb->e_in[i]) {
+                    cout << "(";
+                    print_expression(state.str, state.expressions[i]);
+                    cout << ") ";
+                }
+            cout << endl;
+            cout << "e_Out : ";
+            for (int i = 0; i < exp_count; ++i)
+                if (bb->e_out[i]) {
+                    cout << "(";
+                    print_expression(state.str, state.expressions[i]);
+                    cout << ") ";
+                }
+            cout << endl;
+        }
+    }
+    return 0;
+}
+
+int OPTION_CSE(analysis_state& state, bool b)
+{
+    bool change = true;
+    int var_counter = 0;
+    while (change) {
+        change = false;
+        for (auto bb : state.bb_list) {
+            bitvector def_vars(state.str.size(), 0);
+            for (auto ins : bb->ins_list) {
+                if (ins->type == UNARY) {
+                    def_vars[ins->result.a] = true;
+                    continue;
+                }
+                if (ins->type != BINARY)
+                    continue;
+                if (ins->exp.ops[0].type == VAR_OPERAND && def_vars[ins->exp.ops[0].a])
+                    continue;
+                if (ins->exp.ops[1].type == VAR_OPERAND && def_vars[ins->exp.ops[1].a])
+                    continue;
+                if (bb->e_in[get_index(state.expressions, ins->exp, false)] == false)
+                    continue;
+                change = true;
+                queue<basic_block*> tmp_bb_list;
+                for (auto bbt : bb->pred)
+                    tmp_bb_list.push(bbt);
+                vector<basic_block*> seen_bb;
+                vector<instruction*> ins_for_edit;
+                while (!tmp_bb_list.empty()) {
+                    basic_block* cur_bb = tmp_bb_list.front();
+                    tmp_bb_list.pop();
+                    if (get_index(seen_bb, cur_bb, false) > -1)
+                        continue;
+                    get_index(seen_bb, cur_bb, true);
+
+                    bool found = false;
+                    for (auto ins_it = cur_bb->ins_list.rbegin(); ins_it != cur_bb->ins_list.rend(); ++ins_it)
+                        if ((*ins_it)->type == BINARY && (*ins_it)->exp == ins->exp) {
+                            ins_for_edit.push_back(*ins_it);
+                            found = true;
+                            break;
+                        }
+                    if (!found)
+                        for (auto bbt : cur_bb->pred)
+                            tmp_bb_list.push(bbt);
+                }
+                assert(!ins_for_edit.empty());
+                ++var_counter;
+                ostringstream ss;
+                ss << "cse" << var_counter;
+                int var_id = get_index(state.str, ss.str(), true);
+                for (auto ins : ins_for_edit) {
+                    // create new instruction
+                    instruction* insert_ins = new instruction;
+                    insert_ins->owner = ins->owner;
+                    insert_ins->type = UNARY;
+                    insert_ins->result.type = VAR_OPERAND;
+                    insert_ins->result.a = ins->result.a;
+                    insert_ins->exp.ops[0].type = VAR_OPERAND;
+                    insert_ins->exp.ops[0].a = var_id;
+
+                    // fix old instruction
+                    ins->result.a = var_id;
+
+                    // insert new instruction
+                    auto itr = state.instructions_list.begin();
+                    while (*itr != ins) ++itr;
+                    state.instructions_list.insert(++itr, insert_ins);
+                    itr = ins->owner->ins_list.begin();
+                    while (*itr != ins) ++itr;
+                    ins->owner->ins_list.insert(++itr, insert_ins);
+                }
+                ins->type = UNARY;
+                ins->exp.ops[0].type = VAR_OPERAND;
+                ins->exp.ops[0].a = var_id;
+            }
+        }
+    }
+    OPTION_FG(state, true);
     return 0;
 }
 
@@ -340,10 +555,12 @@ int main(int argc, char* argv[])
                 can_done = false;
         }
         if (can_done) {
+            cout << "------OPT \"" << all_functions[cur_func].name << "\" STARTS" << endl;
             if (cur_func(state, all_functions[cur_func].need_print)) {
                 free_memory(state);
                 return 1;
             }
+            cout << "------OPT \"" << all_functions[cur_func].name << "\" ENDS" << endl;
             all_functions[cur_func].done = true;
         } else
             necessary_functions.push(cur_func);
