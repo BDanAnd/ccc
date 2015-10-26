@@ -23,9 +23,9 @@ enum operand_type {
     ARRAY_OPERAND
 };
 
-//type != ARRAY -> "subtype" and "b" undefined
-//type (subtype) = CONST -> "a" ("b") immediate value
-//type (subtype) = VAR -> "a" ("b") index in string vector
+//type != ARRAY_OPERAND -> "subtype" and "b" undefined
+//type (subtype) = CONST_OPERAND -> "a" ("b") immediate value
+//type (subtype) = VAR_OPERAND -> "a" ("b") index in string vector
 struct operand
 {
     operand_type type;
@@ -89,6 +89,7 @@ struct expression
 // result - left part; exp - right part
 // type = COND -> exp.ops[0] and exp.ops[1] valid
 // type = RETURN -> exp.ops[0] valid
+// type = UNARY -> result and exp.ops[0] valid
 // type = BINARY or COND -> exp.type valid
 struct instruction
 {
@@ -109,6 +110,8 @@ struct basic_block
 
     // for variables
     bitvector gen, kill;
+    bitvector use, def;
+    bitvector in_lv, out_lv;
 
     // for expressions
     bitvector e_gen, e_kill, e_in, e_out;

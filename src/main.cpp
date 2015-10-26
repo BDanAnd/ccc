@@ -102,96 +102,6 @@ void set_tmp_names_for_bb(analysis_state& state, map<basic_block*, string>& tmp)
         }
 }
 
-int OPTION_SETS(analysis_state& state, bool b)
-{
-    map<basic_block*, string> tmp_names_for_bb;
-    if (b)
-        set_tmp_names_for_bb(state, tmp_names_for_bb);
-
-    // calculate definitions and expressions
-    map<int, vector<instruction*> > var_to_ins_list;
-    map<int, vector<int> > var_to_exp_list;
-    for (auto ins : state.instructions_list)
-        if (ins->type == UNARY || ins->type == BINARY) {
-            get_index(state.definitions, ins, true);
-            var_to_ins_list[ins->result.a].push_back(ins);
-            if (ins->type == BINARY)
-                get_index(state.expressions, ins->exp, true);
-        }
-
-    int def_count = state.definitions.size();
-    int exp_count = state.expressions.size();
-    for (int i = 0; i < exp_count; ++i) {
-        var_to_exp_list[state.expressions[i].ops[0].a].push_back(i);
-        var_to_exp_list[state.expressions[i].ops[1].a].push_back(i);
-    }
-    for (auto bb : state.bb_list) {
-        bb->gen = bb->kill = bitvector(def_count);
-        bb->e_gen = bb->e_kill = bb->e_in = bb->e_out = bitvector(exp_count);
-        if (bb == state.entry_bb|| bb == state.exit_bb)
-            continue;
-        // calculate gen kill sets
-        for (auto ins_it = bb->ins_list.rbegin(); ins_it != bb->ins_list.rend(); ++ins_it) {
-            if ((*ins_it)->type != UNARY && (*ins_it)->type != BINARY)
-                continue;
-            bitvector tmp_gen(def_count);
-            tmp_gen[get_index(state.definitions, *ins_it, false)] = true;
-            bb->gen = bb->gen + (tmp_gen - bb->kill);
-            for (auto ins : var_to_ins_list[(*ins_it)->result.a]) {
-                if (ins == *ins_it)
-                    continue;
-                bb->kill[get_index(state.definitions, ins, false)] = true;
-            }
-        }
-        // calculate e_gen e_kill sets
-        int ind;
-        for (auto ins : bb->ins_list)
-            switch(ins->type) {
-                case BINARY:
-                    ind = get_index(state.expressions, ins->exp, false);
-                    bb->e_gen[ind] = true;
-                    bb->e_kill[ind] = false;
-                case UNARY:
-                    for (auto ind : var_to_exp_list[ins->result.a]) {
-                        bb->e_gen[ind] = false;
-                        bb->e_kill[ind] = true;
-                    }
-            }
-        if (!b)
-            continue;
-        cout << BB_NAME(bb) << ":" << endl;
-        cout << "Gen    : ";
-        for (int i = 0; i < def_count; ++i)
-            if (bb->gen[i])
-                cout << "(" << state.str[state.definitions[i]->result.a] << ", " <<
-                    BB_NAME(state.definitions[i]->owner) << ") ";
-        cout << endl;
-        cout << "Kill   : ";
-        for (int i = 0; i < def_count; ++i)
-            if (bb->kill[i])
-                cout << "(" << state.str[state.definitions[i]->result.a] << ", " <<
-                    BB_NAME(state.definitions[i]->owner) << ") ";
-        cout << endl;
-        cout << "e_Gen  : ";
-        for (int i = 0; i < exp_count; ++i)
-            if (bb->e_gen[i]) {
-                cout << "(";
-                print_expression(state.str, state.expressions[i]);
-                cout << ") ";
-            }
-        cout << endl;
-        cout << "e_Kill : ";
-        for (int i = 0; i < exp_count; ++i)
-            if (bb->e_kill[i]) {
-                cout << "(";
-                print_expression(state.str, state.expressions[i]);
-                cout << ") ";
-            }
-        cout << endl << endl;
-    }
-    return 0;
-}
-
 int OPTION_IR(analysis_state& state, bool b)
 {
     if (!b)
@@ -309,6 +219,183 @@ int OPTION_FG(analysis_state& state, bool b)
             cout << "    " << (unsigned long) bb << " -> " << (unsigned long) bs <<
                 ((bb == bs) ? " [dir=back];" : ";") << endl;
     cout << "}" << endl;
+    return 0;
+}
+
+int OPTION_SETS(analysis_state& state, bool b)
+{
+    map<basic_block*, string> tmp_names_for_bb;
+    if (b)
+        set_tmp_names_for_bb(state, tmp_names_for_bb);
+
+    // calculate definitions and expressions
+    map<int, vector<instruction*> > var_to_ins_list;
+    map<int, vector<int> > var_to_exp_list;
+    for (auto ins : state.instructions_list)
+        if (ins->type == UNARY || ins->type == BINARY) {
+            get_index(state.definitions, ins, true);
+            var_to_ins_list[ins->result.a].push_back(ins);
+            if (ins->type == BINARY)
+                get_index(state.expressions, ins->exp, true);
+        }
+
+    int def_count = state.definitions.size();
+    int var_count = state.str.size();
+    int exp_count = state.expressions.size();
+    for (int i = 0; i < exp_count; ++i) {
+        var_to_exp_list[state.expressions[i].ops[0].a].push_back(i);
+        var_to_exp_list[state.expressions[i].ops[1].a].push_back(i);
+    }
+    for (auto bb : state.bb_list) {
+        bb->gen = bb->kill = bitvector(def_count);
+        bb->use = bb->def = bb->in_lv = bb->out_lv = bitvector(var_count);
+        bb->e_gen = bb->e_kill = bb->e_in = bb->e_out = bitvector(exp_count);
+        if (bb == state.entry_bb|| bb == state.exit_bb)
+            continue;
+        // calculate gen kill sets
+        for (auto ins_it = bb->ins_list.rbegin(); ins_it != bb->ins_list.rend(); ++ins_it) {
+            if ((*ins_it)->type != UNARY && (*ins_it)->type != BINARY)
+                continue;
+            bitvector tmp_gen(def_count);
+            tmp_gen[get_index(state.definitions, *ins_it, false)] = true;
+            bb->gen = bb->gen + (tmp_gen - bb->kill);
+            for (auto ins : var_to_ins_list[(*ins_it)->result.a]) {
+                if (ins == *ins_it)
+                    continue;
+                bb->kill[get_index(state.definitions, ins, false)] = true;
+            }
+        }
+        // calculate use def sets
+        for (auto ins : bb->ins_list) {
+            if (ins->type == LABEL || ins->type == UNCOND)
+                continue;
+
+            if (ins->type == BINARY || ins->type == COND) {
+                if (ins->exp.ops[1].type == ARRAY_OPERAND &&
+                    ins->exp.ops[1].subtype == VAR_OPERAND &&
+                    bb->def[ins->exp.ops[1].b] == false)
+                    bb->use[ins->exp.ops[1].b] = true;
+                if (ins->exp.ops[1].type != CONST_OPERAND &&
+                    bb->def[ins->exp.ops[1].a] == false)
+                    bb->use[ins->exp.ops[1].a] = true;
+            }
+
+            if (ins->exp.ops[0].type == ARRAY_OPERAND &&
+                ins->exp.ops[0].subtype == VAR_OPERAND &&
+                bb->def[ins->exp.ops[0].b] == false)
+                bb->use[ins->exp.ops[0].b] = true;
+            if (ins->exp.ops[0].type != CONST_OPERAND &&
+                bb->def[ins->exp.ops[0].a] == false)
+                bb->use[ins->exp.ops[0].a] = true;
+
+            if (ins->type == UNARY || ins->type == BINARY) {
+                if (ins->result.type == ARRAY_OPERAND &&
+                    ins->result.subtype == VAR_OPERAND &&
+                    bb->def[ins->result.b] == false)
+                    bb->use[ins->result.b] = true;
+                if (ins->result.type != CONST_OPERAND)
+                    bb->def[ins->result.a] = true;
+            }
+        }
+        // calculate e_gen e_kill sets
+        int ind;
+        for (auto ins : bb->ins_list)
+            switch(ins->type) {
+                case BINARY:
+                    ind = get_index(state.expressions, ins->exp, false);
+                    bb->e_gen[ind] = true;
+                    bb->e_kill[ind] = false;
+                case UNARY:
+                    for (auto ind : var_to_exp_list[ins->result.a]) {
+                        bb->e_gen[ind] = false;
+                        bb->e_kill[ind] = true;
+                    }
+            }
+        if (!b)
+            continue;
+        cout << BB_NAME(bb) << ":" << endl;
+        cout << "Gen    : ";
+        for (int i = 0; i < def_count; ++i)
+            if (bb->gen[i])
+                cout << "(" << state.str[state.definitions[i]->result.a] << ", " <<
+                    BB_NAME(state.definitions[i]->owner) << ") ";
+        cout << endl;
+        cout << "Kill   : ";
+        for (int i = 0; i < def_count; ++i)
+            if (bb->kill[i])
+                cout << "(" << state.str[state.definitions[i]->result.a] << ", " <<
+                    BB_NAME(state.definitions[i]->owner) << ") ";
+        cout << endl;
+        cout << "Use    : ";
+        for (int i = 0; i < var_count; ++i)
+            if (bb->use[i])
+                cout << state.str[i] << " ";
+        cout << endl;
+        cout << "Def    : ";
+        for (int i = 0; i < var_count; ++i)
+            if (bb->def[i])
+                cout << state.str[i] << " ";
+        cout << endl;
+        cout << "e_Gen  : ";
+        for (int i = 0; i < exp_count; ++i)
+            if (bb->e_gen[i]) {
+                cout << "(";
+                print_expression(state.str, state.expressions[i]);
+                cout << ") ";
+            }
+        cout << endl;
+        cout << "e_Kill : ";
+        for (int i = 0; i < exp_count; ++i)
+            if (bb->e_kill[i]) {
+                cout << "(";
+                print_expression(state.str, state.expressions[i]);
+                cout << ") ";
+            }
+        cout << endl << endl;
+    }
+    return 0;
+}
+
+int OPTION_LV(analysis_state& state, bool b)
+{
+    map<basic_block*, string> tmp_names_for_bb;
+    if (b)
+        set_tmp_names_for_bb(state, tmp_names_for_bb);
+
+    int var_count = state.str.size();
+    bool change = true;
+    int iter_num = 0;
+    while (change) {
+        change = false;
+        for (auto bb : state.bb_list) {
+            if (bb == state.exit_bb)
+                continue;
+            bb->out_lv = bitvector(var_count);
+            for (auto bbp : bb->succ)
+                bb->out_lv = bb->out_lv + bbp->in_lv;
+            bitvector in_new = bb->use + (bb->out_lv - bb->def);
+            if (!(in_new == bb->in_lv)) {
+                bb->in_lv = in_new;
+                change = true;
+            }
+        }
+        if (!b)
+            continue;
+        cout << endl << "Iter num: " << ++iter_num << endl;
+        for (auto bb : state.bb_list) {
+            cout << BB_NAME(bb) << ":" << endl;
+            cout << "In_lv  : ";
+            for (int i = 0; i < var_count; ++i)
+                if (bb->in_lv[i])
+                    cout << state.str[i] << " ";
+            cout << endl;
+            cout << "Out_lv : ";
+            for (int i = 0; i < var_count; ++i)
+                if (bb->out_lv[i])
+                    cout << state.str[i] << " ";
+            cout << endl;
+        }
+    }
     return 0;
 }
 
@@ -498,12 +585,12 @@ int main(int argc, char* argv[])
                 #include "options-wrapper.h"
                 << "\n"
                 << "Options:\n"
-                << "\t-h,-help\t\tShow this help list\n"
-                << "\t-u,-usage\t\tShow a short usage message\n"
-                << "\t< <INPUTFILE>\t\tRead from INPUTFILE\n"
-                << "\t> <OUTPUTFILE>\t\tWrite to OUTPUTFILE\n"
-                << "\t-dfst\t\t\tUse DFST algorithm for BBs numeration\n"
-                << "\t-ALL\t\t\tPrint all (union of all the following flags)\n"
+                << "\t-h,-help\tShow this help list\n"
+                << "\t-u,-usage\tShow a short usage message\n"
+                << "\t< <INPUTFILE>\tRead from INPUTFILE\n"
+                << "\t> <OUTPUTFILE>\tWrite to OUTPUTFILE\n"
+                << "\t-dfst\t\tUse DFST algorithm for BBs numeration (not work)\n" //fixme
+                << "\t-ALL\t\tPrint all (union of all the following flags)\n"
                 #define GENERATE_HELP
                 #include "options-wrapper.h"
                 << endl;
