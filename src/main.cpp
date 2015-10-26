@@ -144,10 +144,13 @@ int OPTION_SETS(analysis_state& state, bool b)
             }
         }
         // calculate e_gen e_kill sets
+        int ind;
         for (auto ins : bb->ins_list)
             switch(ins->type) {
                 case BINARY:
-                    bb->e_gen[get_index(state.expressions, ins->exp, false)] = true;
+                    ind = get_index(state.expressions, ins->exp, false);
+                    bb->e_gen[ind] = true;
+                    bb->e_kill[ind] = false;
                 case UNARY:
                     for (auto ind : var_to_exp_list[ins->result.a]) {
                         bb->e_gen[ind] = false;
@@ -369,6 +372,7 @@ int OPTION_CSE(analysis_state& state, bool b)
 {
     bool change = true;
     int var_counter = 0;
+
     while (change) {
         change = false;
         for (auto bb : state.bb_list) {
@@ -386,12 +390,14 @@ int OPTION_CSE(analysis_state& state, bool b)
                     continue;
                 if (bb->e_in[get_index(state.expressions, ins->exp, false)] == false)
                     continue;
+
                 change = true;
                 queue<basic_block*> tmp_bb_list;
                 for (auto bbt : bb->pred)
                     tmp_bb_list.push(bbt);
                 vector<basic_block*> seen_bb;
                 vector<instruction*> ins_for_edit;
+
                 while (!tmp_bb_list.empty()) {
                     basic_block* cur_bb = tmp_bb_list.front();
                     tmp_bb_list.pop();
@@ -410,39 +416,51 @@ int OPTION_CSE(analysis_state& state, bool b)
                         for (auto bbt : cur_bb->pred)
                             tmp_bb_list.push(bbt);
                 }
+
                 assert(!ins_for_edit.empty());
                 ++var_counter;
                 ostringstream ss;
                 ss << "cse" << var_counter;
+                while (get_index(state.str, ss.str(), false) > -1) {
+                    ss.clear();
+                    ss.str("");
+                    ++var_counter;
+                    ss << "cse" << var_counter;
+                }
                 int var_id = get_index(state.str, ss.str(), true);
-                for (auto ins : ins_for_edit) {
+                for (auto edit_ins : ins_for_edit) {
+                    if (edit_ins == ins)
+                        continue;
+
                     // create new instruction
                     instruction* insert_ins = new instruction;
-                    insert_ins->owner = ins->owner;
+                    insert_ins->owner = edit_ins->owner;
                     insert_ins->type = UNARY;
                     insert_ins->result.type = VAR_OPERAND;
-                    insert_ins->result.a = ins->result.a;
+                    insert_ins->result.a = edit_ins->result.a;
                     insert_ins->exp.ops[0].type = VAR_OPERAND;
                     insert_ins->exp.ops[0].a = var_id;
 
                     // fix old instruction
-                    ins->result.a = var_id;
+                    edit_ins->result.a = var_id;
 
                     // insert new instruction
                     auto itr = state.instructions_list.begin();
-                    while (*itr != ins) ++itr;
+                    while (*itr != edit_ins) ++itr;
                     state.instructions_list.insert(++itr, insert_ins);
-                    itr = ins->owner->ins_list.begin();
-                    while (*itr != ins) ++itr;
-                    ins->owner->ins_list.insert(++itr, insert_ins);
+                    itr = edit_ins->owner->ins_list.begin();
+                    while (*itr != edit_ins) ++itr;
+                    edit_ins->owner->ins_list.insert(++itr, insert_ins);
                 }
+                // fix instruction
                 ins->type = UNARY;
                 ins->exp.ops[0].type = VAR_OPERAND;
                 ins->exp.ops[0].a = var_id;
             }
         }
     }
-    OPTION_FG(state, true);
+    if (b)
+        OPTION_FG(state, true);
     return 0;
 }
 

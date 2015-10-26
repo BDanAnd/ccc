@@ -72,6 +72,7 @@ int parse_input(analysis_state& state)
     map<basic_block*, int> bb_to_label_id;
     instruction *ins;
     for (string line; getline(cin, line);) {
+        line = line.substr(0, line.find("//"));
         istringstream iss(line);
         vector<string> tokens{istream_iterator<string>{iss}, istream_iterator<string>{}};
         switch (tokens.size()) {
@@ -159,6 +160,10 @@ int parse_input(analysis_state& state)
                 // ifTrue
                 if (mode) {
                     cerr << tokens.size() << ":'" << line << "' - 'ifTrue' unexpected" << endl;
+                    return 1;
+                }
+                if (tokens[0].compare("ifTrue") != 0) {
+                    cerr << tokens.size() << ":'" << line << "' - 'ifTrue' expected" << endl;
                     return 1;
                 }
                 ins = new instruction;
@@ -259,24 +264,43 @@ int parse_input(analysis_state& state)
     }
 
     // fill succ sets
+    int label_id;
     for (auto bb : state.bb_list) {
         int count = bb->ins_list.size();
         if (!count) {
-            if (bb_to_label_id.find(bb) != bb_to_label_id.end())
-                bb->succ.push_back(label_id_to_bb[bb_to_label_id[bb]]);
+            if (bb_to_label_id.count(bb))
+                bb->succ.push_back(label_id_to_bb[bb_to_label_id.at(bb)]);
         } else {
             switch (bb->ins_list[count - 1]->type) {
                 case UNARY:
                 case BINARY:
-                    if (bb_to_label_id.find(bb) != bb_to_label_id.end())
-                        bb->succ.push_back(label_id_to_bb[bb_to_label_id[bb]]);
+                    if (bb_to_label_id.count(bb))
+                        bb->succ.push_back(label_id_to_bb[bb_to_label_id.at(bb)]);
                     break;
                 case UNCOND:
-                    bb->succ.push_back(label_id_to_bb[ins_to_label_id[bb->ins_list[count - 1]].first]);
+                    label_id = ins_to_label_id[bb->ins_list[count - 1]].first;
+                    if (label_id_to_bb.count(label_id))
+                        bb->succ.push_back(label_id_to_bb.at(label_id));
+                    else {
+                        cerr << "Error: label '" << label_str[label_id] << "' does not exist" << endl;
+                        return 1;
+                    }
                     break;
                 case COND:
-                    bb->succ.push_back(label_id_to_bb[ins_to_label_id[bb->ins_list[count - 1]].first]);
-                    bb->succ.push_back(label_id_to_bb[ins_to_label_id[bb->ins_list[count - 1]].second]);
+                    label_id = ins_to_label_id[bb->ins_list[count - 1]].first;
+                    if (label_id_to_bb.count(label_id))
+                        bb->succ.push_back(label_id_to_bb.at(label_id));
+                    else {
+                        cerr << "Error: label '" << label_str[label_id] << "' does not exist" << endl;
+                        return 1;
+                    }
+                    label_id = ins_to_label_id[bb->ins_list[count - 1]].second;
+                    if (label_id_to_bb.count(label_id))
+                        bb->succ.push_back(label_id_to_bb.at(label_id));
+                    else {
+                        cerr << "Error: label '" << label_str[label_id] << "' does not exist" << endl;
+                        return 1;
+                    }
                     break;
                 case RETURN:
                     bb->succ.push_back(state.exit_bb);
