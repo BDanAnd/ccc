@@ -108,13 +108,11 @@ struct basic_block
     vector<instruction*> ins_list;
     vector<basic_block*> succ, pred; // sets of successor and predecessor
 
-    // for variables
-    bitvector gen, kill;
-    bitvector use, def;
-    bitvector in_lv, out_lv;
-
-    // for expressions
-    bitvector e_gen, e_kill, e_in, e_out;
+    bitvector gen, kill,
+              use, def, in_lv, out_lv,
+              du_use, du_def, du_in, du_out,
+              c_gen, c_kill, c_in, c_out,
+              e_gen, e_kill, e_in, e_out;
 };
 
 // temporary

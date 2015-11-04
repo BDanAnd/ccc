@@ -5,3 +5,6 @@ DEF(SETS, "Print sets for all BBs", {})
 DEF(LV, "Print live variable analysis", {OPTION_SETS})
 DEF(AE, "Print available expressions for all BBs", {OPTION_SETS})
 DEF(CSE, "Print full digraph after CSE optimization", {OPTION_AE})
+DEF(CP, "Print full digraph after copy propagation optimization", {OPTION_SETS})
+
+DEF(TASK1, "Print full digraph after CSE and CP", {})

@@ -154,6 +154,8 @@ int parse_input(analysis_state& state)
                     delete ins;
                     return 1;
                 }
+                assert(ins->result.type != CONST_OPERAND);
+                assert(!(ins->result.type == ARRAY_OPERAND && ins->exp.ops[0].type == ARRAY_OPERAND));
                 state.instructions_list.push_back(ins);
                 break;
             case 5:
@@ -175,6 +177,8 @@ int parse_input(analysis_state& state)
                     delete ins;
                     return 1;
                 }
+                assert(ins->exp.ops[0].type != ARRAY_OPERAND);
+                assert(ins->exp.ops[1].type != ARRAY_OPERAND);
                 state.instructions_list.push_back(ins);
                 mode = 1;
                 break;
@@ -194,6 +198,9 @@ int parse_input(analysis_state& state)
                     delete ins;
                     return 1;
                 }
+                assert(ins->result.type == VAR_OPERAND);
+                assert(ins->exp.ops[0].type != ARRAY_OPERAND);
+                assert(ins->exp.ops[1].type != ARRAY_OPERAND);
                 state.instructions_list.push_back(ins);
                 break;
             default:
