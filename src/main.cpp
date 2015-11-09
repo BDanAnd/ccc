@@ -612,6 +612,18 @@ int OPTION_CSE(analysis_state& state, bool b)
     return 0;
 }
 
+void replace_var(operand& op, int before, int after, bool change_def = false)
+{
+    if (change_def && op.type == VAR_OPERAND && op.a == before)
+        op.a = after;
+    if (op.type == ARRAY_OPERAND) {
+        if (change_def && op.a == before)
+            op.a = after;
+        if (op.subtype == VAR_OPERAND && op.b == before)
+            op.b = after;
+    }
+}
+
 int OPTION_CP(analysis_state& state, bool b)
 {
     // calculate c_in c_out
@@ -714,74 +726,6 @@ int OPTION_CP(analysis_state& state, bool b)
             }
         }
     }
-    vector<instruction*> for_delete;
-    for (auto ins : state.definitions) {
-        // only "VAR = VAR"
-        if (!(ins->type == UNARY &&
-              ins->result.type == VAR_OPERAND &&
-              ins->exp.ops[0].type == VAR_OPERAND))
-            continue;
-        vector<instruction*> uses;
-        for (int i = 0;  i < us; ++i)
-            if (ins->owner->du_out[i] && U[i].second == ins->result.a)
-                get_index(uses, U[i].first, true);
-        bool need_delete = !uses.empty();
-        for (auto uses_ins : uses) {
-            if (uses_ins->owner->c_in[get_index(state.definitions, ins, false)] == false) {
-                need_delete = false;
-                break;
-            }
-            for (auto ins_s : uses_ins->owner->ins_list) {
-                if (ins_s == uses_ins)
-                    break;
-                if ((ins_s->type == UNARY || ins_s->type == BINARY) &&
-                    ins_s->result.type == VAR_OPERAND &&
-                    (ins_s->result.a == ins->result.a || ins_s->result.a == ins->exp.ops[0].a)) {
-                    need_delete = false;
-                    break;
-                }
-            }
-            if (!need_delete)
-                break;
-        }
-        if (need_delete) {
-            int before = ins->result.a;
-            int after = ins->exp.ops[0].a;
-            for (auto ins : uses)
-                switch(ins->type) {
-                    case UNARY:
-                        if (ins->result.type == ARRAY_OPERAND &&
-                            ins->result.subtype == VAR_OPERAND &&
-                            ins->result.b == before)
-                            {ins->result.b = after;cout << "fix" << endl;}
-                    case RETURN:
-                        if (ins->exp.ops[0].type == VAR_OPERAND &&
-                            ins->exp.ops[0].a == before)
-                            ins->exp.ops[0].a = after;
-                        if (ins->exp.ops[0].type == ARRAY_OPERAND) {
-                            if (ins->exp.ops[0].a == before)
-                                ins->exp.ops[0].a = after;
-                            if (ins->exp.ops[0].subtype == VAR_OPERAND &&
-                                ins->exp.ops[0].b == before)
-                                ins->exp.ops[0].b = after;
-                        }
-                        break;
-                    case BINARY:
-                    case COND:
-                        if (ins->exp.ops[0].type == VAR_OPERAND &&
-                            ins->exp.ops[0].a == before)
-                            ins->exp.ops[0].a = after;
-                        if (ins->exp.ops[1].type == VAR_OPERAND &&
-                            ins->exp.ops[1].a == before)
-                            ins->exp.ops[1].a = after;
-                }
-            get_index(for_delete, ins, true);
-
-            // broke current ins
-            ins->result.type = CONST_OPERAND;
-            ins->exp.ops[0].type = CONST_OPERAND;
-        }
-    }
     if (b) {
         map<basic_block*, string> tmp_names_for_bb;
         set_tmp_names_for_bb(state, tmp_names_for_bb);
@@ -835,6 +779,59 @@ int OPTION_CP(analysis_state& state, bool b)
                     cout << " ; " << state.str[U[i].second] << ") ";
                 }
             cout << endl << endl;
+        }
+    }
+    vector<instruction*> for_delete;
+    for (auto ins : state.definitions) {
+        // only "VAR = VAR"
+        if (get_index(for_delete, ins, false) > -1 ||
+            !(ins->type == UNARY &&
+              ins->result.type == VAR_OPERAND &&
+              ins->exp.ops[0].type == VAR_OPERAND))
+            continue;
+        vector<instruction*> uses;
+        for (int i = 0;  i < us; ++i)
+            if (get_index(for_delete, ins, false) == -1 &&
+                ins->owner->du_out[i] &&
+                U[i].second == ins->result.a)
+                get_index(uses, U[i].first, true);
+        bool need_delete = !uses.empty();
+        for (auto uses_ins : uses) {
+            if (uses_ins->owner->c_in[get_index(state.definitions, ins, false)] == false) {
+                need_delete = false;
+                break;
+            }
+            for (auto ins_s : uses_ins->owner->ins_list) {
+                if (ins_s == uses_ins)
+                    break;
+                if ((ins_s->type == UNARY || ins_s->type == BINARY) &&
+                    ins_s->result.type == VAR_OPERAND &&
+                    (ins_s->result.a == ins->result.a || ins_s->result.a == ins->exp.ops[0].a)) {
+                    need_delete = false;
+                    break;
+                }
+            }
+            if (!need_delete)
+                break;
+        }
+        if (need_delete) {
+            int before = ins->result.a;
+            int after = ins->exp.ops[0].a;
+            for (auto ins : uses)
+                switch(ins->type) {
+                    case UNARY:
+                        replace_var(ins->result, before, after, false);
+                    case RETURN:
+                        replace_var(ins->exp.ops[0], before, after, true);
+                        break;
+                    case BINARY:
+                    case COND:
+                        /* simplification: in such instructions there can't be ARRAY_OPERAND */
+                        replace_var(ins->result, before, after, false);
+                        replace_var(ins->exp.ops[0], before, after, true);
+                        replace_var(ins->exp.ops[1], before, after, true);
+                }
+            get_index(for_delete, ins, true);
         }
     }
     for (auto ins : for_delete) {
