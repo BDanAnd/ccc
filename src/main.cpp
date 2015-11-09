@@ -849,6 +849,90 @@ int OPTION_CP(analysis_state& state, bool b)
     return 0;
 }
 
+int calculate_dominators(analysis_state& state, bool b)
+{
+    map<basic_block*, string> tmp_names_for_bb;
+    if (b)
+        set_tmp_names_for_bb(state, tmp_names_for_bb);
+
+    int bb_count = state.bb_list.size();
+    for (auto bb : state.bb_list)
+        bb->dom = bitvector(bb_count, true);
+    state.entry_bb->dom = bitvector(bb_count);
+    state.entry_bb->dom[get_index(state.bb_list, state.entry_bb, false)] = true;
+    bool change = true;
+    int iter_num = 0;
+    if (b)
+        cout << "Dominator computing:" << endl;
+    while (change) {
+        change = false;
+        for (auto bb : state.bb_list) {
+            if (bb == state.entry_bb)
+                continue;
+            bitvector tmp = bitvector(bb_count, true);
+            for (auto pred_bb : bb->pred)
+                tmp = tmp * pred_bb->dom;
+            tmp[get_index(state.bb_list, bb, false)] = true;
+            if (!(tmp == bb->dom)) {
+                bb->dom = tmp;
+                change = true;
+            }
+        }
+        if (!b)
+            continue;
+        cout << endl << "Iter num: " << ++iter_num << endl;
+        for (auto bb : state.bb_list) {
+            cout << BB_NAME(bb) << " dom - ";
+            for (int i = 0; i < bb_count; ++i)
+                if (bb->dom[i])
+                    cout << BB_NAME(state.bb_list[i]) << " ";
+            cout << endl;
+        }
+    }
+    if (b)
+        cout << endl;
+    return 0;
+}
+
+void loops_search(vector<basic_block*> bb_list, basic_block* bb, bitvector& a)
+{
+    int ind = get_index(bb_list, bb, false);
+    if (!a[ind]) {
+        a[ind] = true;
+        for (auto pred_bb : bb->pred)
+            loops_search(bb_list, pred_bb, a);
+    }
+}
+
+vector<bitvector> get_natural_loops(analysis_state& state, bool b)
+{
+    map<basic_block*, string> tmp_names_for_bb;
+    if (b)
+        set_tmp_names_for_bb(state, tmp_names_for_bb);
+
+    int bb_count = state.bb_list.size();
+    vector<bitvector> natural_loops;
+    for (auto bb : state.bb_list)
+        for (auto succ_bb : bb->succ) {
+            int ind = get_index(state.bb_list, succ_bb, false);
+            if (bb->dom[ind]) {
+                bitvector loop(bb_count);
+                loop[ind] = true;
+                loops_search(state.bb_list, bb, loop);
+                get_index(natural_loops, loop, true);
+            }
+        }
+    if (b)
+        for (auto loop: natural_loops) {
+            cout << "Loop: ";
+            for (int i = 0; i < bb_count; ++i)
+                if (loop[i])
+                    cout << BB_NAME(state.bb_list[i]) << " ";
+            cout << endl;
+        }
+    return natural_loops;
+}
+
 int split_bbs(analysis_state& state)
 {
     vector<basic_block*>  new_bb_list;
@@ -927,6 +1011,10 @@ int OPTION_TASK1(analysis_state& state, bool b)
     OPTION_SETS(state, false);
     OPTION_CP(state, false);
     merge_bbs(state);
+
+    OPTION_SETS(state, false);
+    calculate_dominators(state, true);
+    get_natural_loops(state, true);
     if (b)
         OPTION_FG(state, true);
     return 0;

@@ -112,7 +112,8 @@ struct basic_block
               use, def, in_lv, out_lv,
               du_use, du_def, du_in, du_out,
               c_gen, c_kill, c_in, c_out,
-              e_gen, e_kill, e_in, e_out;
+              e_gen, e_kill, e_in, e_out,
+              dom;
 };
 
 // temporary
