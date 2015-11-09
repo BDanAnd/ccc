@@ -237,6 +237,7 @@ int OPTION_SETS(analysis_state& state, bool b)
     // clear information
     state.definitions.clear();
     state.expressions.clear();
+    state.du_chains.clear();
 
     // calculate definitions and expressions
     map<int, vector<instruction*> > var_to_ins_list;
@@ -415,6 +416,158 @@ int OPTION_SETS(analysis_state& state, bool b)
                 cout << ", " << BB_NAME(state.definitions[i]->owner) << ") ";
             }
         cout << endl << endl;
+    }
+    // calculate c_in c_out
+    bool change = true;
+    while (change) {
+        change = false;
+        for (auto bb : state.bb_list) {
+            if (bb == state.entry_bb)
+                continue;
+            bb->c_in = bitvector(def_count, !bb->pred.empty());
+            for (auto bbp : bb->pred)
+                bb->c_in = bb->c_in * bbp->c_out;
+            bitvector out_new = bb->c_gen + (bb->c_in - bb->c_kill);
+            if (!(out_new == bb->c_out)) {
+                bb->c_out = out_new;
+                change = true;
+            }
+        }
+    }
+    // calculate du_use du_def sets
+    for (auto bb : state.bb_list)
+        for (auto ins : bb->ins_list)
+            switch (ins->type) {
+                case UNARY:
+                    if (ins->result.type == ARRAY_OPERAND && ins->result.subtype == VAR_OPERAND)
+                        get_index(state.du_chains, {ins, ins->result.b}, true);
+                case RETURN:
+                    if (ins->exp.ops[0].type == VAR_OPERAND)
+                        get_index(state.du_chains, {ins, ins->exp.ops[0].a}, true);
+                    if (ins->exp.ops[0].type == ARRAY_OPERAND) {
+                        get_index(state.du_chains, {ins, ins->exp.ops[0].a}, true);
+                        if (ins->exp.ops[0].subtype == VAR_OPERAND)
+                            get_index(state.du_chains, {ins, ins->exp.ops[0].b}, true);
+                    }
+                    break;
+                case BINARY:
+                case COND:
+                    if (ins->exp.ops[0].type == VAR_OPERAND)
+                        get_index(state.du_chains, {ins, ins->exp.ops[0].a}, true);
+                    if (ins->exp.ops[1].type == VAR_OPERAND)
+                        get_index(state.du_chains, {ins, ins->exp.ops[1].a}, true);
+            }
+    int us = state.du_chains.size();
+    for (auto bb : state.bb_list) {
+        bb->du_use = bb->du_def = bb->du_in = bb->du_out = bitvector(us);
+        if (bb == state.entry_bb|| bb == state.exit_bb)
+            continue;
+        bitvector var_defs(state.str.size());
+        for (auto ins : bb->ins_list) {
+            switch (ins->type) {
+                case UNARY:
+                    if (ins->result.type == ARRAY_OPERAND &&
+                        ins->result.subtype == VAR_OPERAND &&
+                        var_defs[ins->result.b] == false)
+                        bb->du_use[get_index(state.du_chains, {ins, ins->result.b}, false)] = true;
+                case RETURN:
+                    if (ins->exp.ops[0].type == VAR_OPERAND &&
+                        var_defs[ins->exp.ops[0].a] == false)
+                        bb->du_use[get_index(state.du_chains, {ins, ins->exp.ops[0].a}, false)] = true;
+                    if (ins->exp.ops[0].type == ARRAY_OPERAND) {
+                        if (var_defs[ins->exp.ops[0].a] == false)
+                            bb->du_use[get_index(state.du_chains, {ins, ins->exp.ops[0].a}, false)] = true;
+                        if (ins->exp.ops[0].subtype == VAR_OPERAND &&
+                            var_defs[ins->exp.ops[0].b] == false)
+                            bb->du_use[get_index(state.du_chains, {ins, ins->exp.ops[0].b}, false)] = true;
+                    }
+                    break;
+                case BINARY:
+                case COND:
+                    if (ins->exp.ops[0].type == VAR_OPERAND &&
+                        var_defs[ins->exp.ops[0].a] == false)
+                        bb->du_use[get_index(state.du_chains, {ins, ins->exp.ops[0].a}, false)] = true;
+                    if (ins->exp.ops[1].type == VAR_OPERAND &&
+                        var_defs[ins->exp.ops[1].a] == false)
+                        bb->du_use[get_index(state.du_chains, {ins, ins->exp.ops[1].a}, false)] = true;
+            }
+            if ((ins->type == UNARY || ins->type == BINARY) && ins->result.type != CONST_OPERAND)
+                var_defs[ins->result.a] = true;
+        }
+        for (auto p : state.du_chains)
+            if (var_defs[p.second] == true && p.first->owner != bb)
+                bb->du_def[get_index(state.du_chains, p, false)] = true;
+    }
+    // calculate du_in du_out
+    change = true;
+    while (change) {
+        change = false;
+        for (auto bb : state.bb_list) {
+            if (bb == state.exit_bb)
+                continue;
+            bb->du_out = bitvector(us);
+            for (auto bbp : bb->succ)
+                bb->du_out = bb->du_out + bbp->du_in;
+            bitvector in_new = bb->du_use + (bb->du_out - bb->du_def);
+            if (!(in_new == bb->du_in)) {
+                bb->du_in = in_new;
+                change = true;
+            }
+        }
+    }
+    if (b) {
+        cout << "------" << endl;
+        for (auto bb : state.bb_list) {
+            cout << BB_NAME(bb) << endl;
+            cout << "c_in   : ";
+            for (int i = 0; i < def_count; ++i)
+                if (bb->c_in[i]) {
+                    cout << "(";
+                    print_instruction(state.str, state.definitions[i]);
+                    cout << ", " << BB_NAME(state.definitions[i]->owner) << ") ";
+                }
+            cout << endl;
+            cout << "c_out  : ";
+            for (int i = 0; i < def_count; ++i)
+                if (bb->c_out[i]) {
+                    cout << "(";
+                    print_instruction(state.str, state.definitions[i]);
+                    cout << ", " << BB_NAME(state.definitions[i]->owner) << ") ";
+                }
+            cout << endl;
+            cout << "du_use : ";
+            for (int i = 0; i < us; ++i)
+                if (bb->du_use[i]) {
+                    cout << "(";
+                    print_instruction(state.str, state.du_chains[i].first, true);
+                    cout << " ; " << state.str[state.du_chains[i].second] << ") ";
+                }
+            cout << endl;
+            cout << "du_def : ";
+            for (int i = 0; i < us; ++i)
+                if (bb->du_def[i]) {
+                    cout << "(";
+                    print_instruction(state.str, state.du_chains[i].first, true);
+                    cout << " ; " << state.str[state.du_chains[i].second] << ") ";
+                }
+            cout << endl;
+            cout << "du_in  : ";
+            for (int i = 0; i < us; ++i)
+                if (bb->du_in[i]) {
+                    cout << "(";
+                    print_instruction(state.str, state.du_chains[i].first, true);
+                    cout << " ; " << state.str[state.du_chains[i].second] << ") ";
+                }
+            cout << endl;
+            cout << "du_out : ";
+            for (int i = 0; i < us; ++i)
+                if (bb->du_out[i]) {
+                    cout << "(";
+                    print_instruction(state.str, state.du_chains[i].first, true);
+                    cout << " ; " << state.str[state.du_chains[i].second] << ") ";
+                }
+            cout << endl << endl;
+        }
     }
     return 0;
 }
@@ -624,177 +777,34 @@ void replace_var(operand& op, int before, int after, bool change_def = false)
     }
 }
 
+void delete_ins(analysis_state& state, instruction* ins)
+{
+    auto itr = state.instructions_list.begin();
+    while (*itr != ins) ++itr;
+    state.instructions_list.erase(itr);
+    itr = ins->owner->ins_list.begin();
+    while (*itr != ins) ++itr;
+    ins->owner->ins_list.erase(itr);
+    delete ins;
+}
+
 int OPTION_CP(analysis_state& state, bool b)
 {
-    // calculate c_in c_out
-    int def_count = state.definitions.size();
-    bool change = true;
-    while (change) {
-        change = false;
-        for (auto bb : state.bb_list) {
-            if (bb == state.entry_bb)
-                continue;
-            bb->c_in = bitvector(def_count, !bb->pred.empty());
-            for (auto bbp : bb->pred)
-                bb->c_in = bb->c_in * bbp->c_out;
-            bitvector out_new = bb->c_gen + (bb->c_in - bb->c_kill);
-            if (!(out_new == bb->c_out)) {
-                bb->c_out = out_new;
-                change = true;
-            }
-        }
-    }
-    // calculate du_use du_def sets
-    vector<pair<instruction*, int> > U;
-    for (auto bb : state.bb_list)
-        for (auto ins : bb->ins_list)
-            switch (ins->type) {
-                case UNARY:
-                    if (ins->result.type == ARRAY_OPERAND && ins->result.subtype == VAR_OPERAND)
-                        get_index(U, {ins, ins->result.b}, true);
-                case RETURN:
-                    if (ins->exp.ops[0].type == VAR_OPERAND)
-                        get_index(U, {ins, ins->exp.ops[0].a}, true);
-                    if (ins->exp.ops[0].type == ARRAY_OPERAND) {
-                        get_index(U, {ins, ins->exp.ops[0].a}, true);
-                        if (ins->exp.ops[0].subtype == VAR_OPERAND)
-                            get_index(U, {ins, ins->exp.ops[0].b}, true);
-                    }
-                    break;
-                case BINARY:
-                case COND:
-                    if (ins->exp.ops[0].type == VAR_OPERAND)
-                        get_index(U, {ins, ins->exp.ops[0].a}, true);
-                    if (ins->exp.ops[1].type == VAR_OPERAND)
-                        get_index(U, {ins, ins->exp.ops[1].a}, true);
-            }
-    int us = U.size();
-    for (auto bb : state.bb_list) {
-        bb->du_use = bb->du_def = bb->du_in = bb->du_out = bitvector(us);
-        if (bb == state.entry_bb|| bb == state.exit_bb)
+    auto ins_list = state.definitions;
+    for (auto ins : ins_list) {
+        OPTION_SETS(state, false);
+        if (get_index(state.definitions, ins, false) == -1)
             continue;
-        bitvector var_defs(state.str.size());
-        for (auto ins : bb->ins_list) {
-            switch (ins->type) {
-                case UNARY:
-                    if (ins->result.type == ARRAY_OPERAND &&
-                        ins->result.subtype == VAR_OPERAND &&
-                        var_defs[ins->result.b] == false)
-                        bb->du_use[get_index(U, {ins, ins->result.b}, false)] = true;
-                case RETURN:
-                    if (ins->exp.ops[0].type == VAR_OPERAND &&
-                        var_defs[ins->exp.ops[0].a] == false)
-                        bb->du_use[get_index(U, {ins, ins->exp.ops[0].a}, false)] = true;
-                    if (ins->exp.ops[0].type == ARRAY_OPERAND) {
-                        if (var_defs[ins->exp.ops[0].a] == false)
-                            bb->du_use[get_index(U, {ins, ins->exp.ops[0].a}, false)] = true;
-                        if (ins->exp.ops[0].subtype == VAR_OPERAND &&
-                            var_defs[ins->exp.ops[0].b] == false)
-                            bb->du_use[get_index(U, {ins, ins->exp.ops[0].b}, false)] = true;
-                    }
-                    break;
-                case BINARY:
-                case COND:
-                    if (ins->exp.ops[0].type == VAR_OPERAND &&
-                        var_defs[ins->exp.ops[0].a] == false)
-                        bb->du_use[get_index(U, {ins, ins->exp.ops[0].a}, false)] = true;
-                    if (ins->exp.ops[1].type == VAR_OPERAND &&
-                        var_defs[ins->exp.ops[1].a] == false)
-                        bb->du_use[get_index(U, {ins, ins->exp.ops[1].a}, false)] = true;
-            }
-            if ((ins->type == UNARY || ins->type == BINARY) && ins->result.type != CONST_OPERAND)
-                var_defs[ins->result.a] = true;
-        }
-        for (auto p : U)
-            if (var_defs[p.second] == true && p.first->owner != bb)
-                bb->du_def[get_index(U, p, false)] = true;
-    }
-    // calculate du_in du_out
-    change = true;
-    while (change) {
-        change = false;
-        for (auto bb : state.bb_list) {
-            if (bb == state.exit_bb)
-                continue;
-            bb->du_out = bitvector(us);
-            for (auto bbp : bb->succ)
-                bb->du_out = bb->du_out + bbp->du_in;
-            bitvector in_new = bb->du_use + (bb->du_out - bb->du_def);
-            if (!(in_new == bb->du_in)) {
-                bb->du_in = in_new;
-                change = true;
-            }
-        }
-    }
-    if (b) {
-        map<basic_block*, string> tmp_names_for_bb;
-        set_tmp_names_for_bb(state, tmp_names_for_bb);
-        for (auto bb : state.bb_list) {
-            cout << BB_NAME(bb) << endl;
-            cout << "c_in   : ";
-            for (int i = 0; i < def_count; ++i)
-                if (bb->c_in[i]) {
-                    cout << "(";
-                    print_instruction(state.str, state.definitions[i]);
-                    cout << ", " << BB_NAME(state.definitions[i]->owner) << ") ";
-                }
-            cout << endl;
-            cout << "c_out  : ";
-            for (int i = 0; i < def_count; ++i)
-                if (bb->c_out[i]) {
-                    cout << "(";
-                    print_instruction(state.str, state.definitions[i]);
-                    cout << ", " << BB_NAME(state.definitions[i]->owner) << ") ";
-                }
-            cout << endl;
-            cout << "du_use : ";
-            for (int i = 0; i < us; ++i)
-                if (bb->du_use[i]) {
-                    cout << "(";
-                    print_instruction(state.str, U[i].first, true);
-                    cout << " ; " << state.str[U[i].second] << ") ";
-                }
-            cout << endl;
-            cout << "du_def : ";
-            for (int i = 0; i < us; ++i)
-                if (bb->du_def[i]) {
-                    cout << "(";
-                    print_instruction(state.str, U[i].first, true);
-                    cout << " ; " << state.str[U[i].second] << ") ";
-                }
-            cout << endl;
-            cout << "du_in  : ";
-            for (int i = 0; i < us; ++i)
-                if (bb->du_in[i]) {
-                    cout << "(";
-                    print_instruction(state.str, U[i].first, true);
-                    cout << " ; " << state.str[U[i].second] << ") ";
-                }
-            cout << endl;
-            cout << "du_out : ";
-            for (int i = 0; i < us; ++i)
-                if (bb->du_out[i]) {
-                    cout << "(";
-                    print_instruction(state.str, U[i].first, true);
-                    cout << " ; " << state.str[U[i].second] << ") ";
-                }
-            cout << endl << endl;
-        }
-    }
-    vector<instruction*> for_delete;
-    for (auto ins : state.definitions) {
+        int us = state.du_chains.size();
         // only "VAR = VAR"
-        if (get_index(for_delete, ins, false) > -1 ||
-            !(ins->type == UNARY &&
+        if (!(ins->type == UNARY &&
               ins->result.type == VAR_OPERAND &&
               ins->exp.ops[0].type == VAR_OPERAND))
             continue;
         vector<instruction*> uses;
         for (int i = 0;  i < us; ++i)
-            if (get_index(for_delete, ins, false) == -1 &&
-                ins->owner->du_out[i] &&
-                U[i].second == ins->result.a)
-                get_index(uses, U[i].first, true);
+            if (ins->owner->du_out[i] && state.du_chains[i].second == ins->result.a)
+                get_index(uses, state.du_chains[i].first, true);
         bool need_delete = !uses.empty();
         for (auto uses_ins : uses) {
             if (uses_ins->owner->c_in[get_index(state.definitions, ins, false)] == false) {
@@ -831,17 +841,8 @@ int OPTION_CP(analysis_state& state, bool b)
                         replace_var(ins->exp.ops[0], before, after, true);
                         replace_var(ins->exp.ops[1], before, after, true);
                 }
-            get_index(for_delete, ins, true);
+            delete_ins(state, ins);
         }
-    }
-    for (auto ins : for_delete) {
-        auto itr = state.instructions_list.begin();
-        while (*itr != ins) ++itr;
-        state.instructions_list.erase(itr);
-        itr = ins->owner->ins_list.begin();
-        while (*itr != ins) ++itr;
-        ins->owner->ins_list.erase(itr);
-        delete ins;
     }
     if (b)
         OPTION_FG(state, true);
@@ -902,6 +903,10 @@ int merge_bbs(analysis_state& state)
             for (auto succ_bb : bb->succ)
                 while ((ind = get_index(succ_bb->pred, next_bb, false)) > -1)
                     succ_bb->pred[ind] = bb;
+            instruction* ins;
+            if (!bb->ins_list.empty() &&
+                (ins = *(bb->ins_list.end() - 1))->type == UNCOND)
+                delete_ins(state, ins);
             for (auto ins : next_bb->ins_list) {
                 bb->ins_list.push_back(ins);
                 ins->owner = bb;

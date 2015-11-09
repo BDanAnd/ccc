@@ -127,6 +127,7 @@ struct analysis_state
     vector<basic_block*> bb_list; // all basic blocks
     vector<instruction*> definitions;
     vector<expression> expressions;
+    vector<pair<instruction*, int> > du_chains;
 
     basic_block* entry_bb = NULL;
     basic_block* exit_bb = NULL;
