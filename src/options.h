@@ -10,4 +10,4 @@ DEF(CP, "Print FG after copy propagation optimization", {OPTION_SETS})
 DEF(SR, "Print FG after strength reduction optimization", {OPTION_RD dv calculate_dominators})
 DEF(IVE, "Print FG after induction vars elimination optimization (not work)", {OPTION_RD dv OPTION_LV dv calculate_dominators})
 
-DEF(TASK1, "Print full digraph after CSE, CP and CO", {})
+DEF(TASK1, "Print FG after CSE, CP and SR", {})
