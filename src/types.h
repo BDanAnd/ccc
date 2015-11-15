@@ -9,6 +9,7 @@
 #include <map>
 #include <queue>
 #include <set>
+#include <stack>
 #include <algorithm>
 #include <iterator>
 #include <string>
@@ -108,7 +109,7 @@ struct basic_block
     vector<instruction*> ins_list;
     vector<basic_block*> succ, pred; // sets of successor and predecessor
 
-    bitvector gen, kill,
+    bitvector gen, kill, in_rd, out_rd,
               use, def, in_lv, out_lv,
               du_use, du_def, du_in, du_out,
               c_gen, c_kill, c_in, c_out,
@@ -132,6 +133,8 @@ struct analysis_state
 
     basic_block* entry_bb = NULL;
     basic_block* exit_bb = NULL;
+
+    bool changed = false;
 };
 
 typedef int (*func_ptr)(analysis_state&, bool);

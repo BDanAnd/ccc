@@ -108,6 +108,60 @@ void set_tmp_names_for_bb(analysis_state& state, map<basic_block*, string>& tmp)
         }
 }
 
+void delete_ins(analysis_state& state, instruction* ins)
+{
+    auto itr = state.instructions_list.begin();
+    while (*itr != ins) ++itr;
+    state.instructions_list.erase(itr);
+    itr = ins->owner->ins_list.begin();
+    while (*itr != ins) ++itr;
+    ins->owner->ins_list.erase(itr);
+    delete ins;
+}
+
+int merge_bbs(analysis_state& state)
+{
+    bool change = true;
+    while (change) {
+        change = false;
+        vector<basic_block*> new_bb_list;
+        vector<basic_block*> deleted_bbs;
+        for (auto bb : state.bb_list) {
+            if (get_index(deleted_bbs, bb, false) > -1)
+                continue;
+            new_bb_list.push_back(bb);
+            if (bb == state.entry_bb || bb == state.exit_bb)
+                continue;
+            while (bb->succ.size() == 1 &&
+                   bb->succ[0]->pred.size() == 1 &&
+                   bb->succ[0] != state.exit_bb) {
+                auto next_bb = bb->succ[0];
+                get_index(deleted_bbs, next_bb, true);
+                bb->succ = next_bb->succ;
+                int ind;
+                for (auto succ_bb : bb->succ)
+                    while ((ind = get_index(succ_bb->pred, next_bb, false)) > -1)
+                        succ_bb->pred[ind] = bb;
+                instruction* ins;
+                if (!bb->ins_list.empty() &&
+                    (ins = *(bb->ins_list.end() - 1))->type == UNCOND)
+                    delete_ins(state, ins);
+                for (auto ins : next_bb->ins_list) {
+                    bb->ins_list.push_back(ins);
+                    ins->owner = bb;
+                }
+                delete next_bb;
+                change = true;
+            }
+        }
+        state.bb_list = {};
+        for (auto bb : new_bb_list)
+            if (get_index(deleted_bbs, bb, false) == -1)
+                state.bb_list.push_back(bb);
+    }
+    return 0;
+}
+
 int OPTION_IR(analysis_state& state, bool b)
 {
     if (!b)
@@ -258,7 +312,7 @@ int OPTION_SETS(analysis_state& state, bool b)
         var_to_exp_list[state.expressions[i].ops[1].a].push_back(i);
     }
     for (auto bb : state.bb_list) {
-        bb->gen = bb->kill = bitvector(def_count);
+        bb->gen = bb->kill = bb->in_rd = bb->out_rd = bitvector(def_count);
         bb->c_gen = bb->c_kill = bb->c_in = bb->c_out = bitvector(def_count);
         bb->use = bb->def = bb->in_lv = bb->out_lv = bitvector(var_count);
         bb->e_gen = bb->e_kill = bb->e_in = bb->e_out = bitvector(exp_count);
@@ -572,6 +626,51 @@ int OPTION_SETS(analysis_state& state, bool b)
     return 0;
 }
 
+int OPTION_RD(analysis_state& state, bool b)
+{
+    map<basic_block*, string> tmp_names_for_bb;
+    if (b)
+        set_tmp_names_for_bb(state, tmp_names_for_bb);
+
+    int def_count = state.definitions.size();
+    bool change = true;
+    int iter_num = 0;
+    while (change) {
+        change = false;
+        for (auto bb : state.bb_list) {
+            if (bb == state.entry_bb)
+                continue;
+            bb->in_rd = bitvector(def_count);
+            for (auto bbp : bb->pred)
+                bb->in_rd = bb->in_rd + bbp->out_rd;
+            bitvector out_new = bb->gen + (bb->in_rd - bb->kill);
+            if (!(out_new == bb->out_rd)) {
+                bb->out_rd = out_new;
+                change = true;
+            }
+        }
+        if (!b)
+            continue;
+        cout << endl << "Iter num: " << ++iter_num << endl;
+        for (auto bb : state.bb_list) {
+            cout << BB_NAME(bb) << ":" << endl;
+            cout << "In_Rd  : ";
+            for (int i = 0; i < def_count; ++i)
+                if (bb->in_rd[i])
+                    cout << "(" << state.str[state.definitions[i]->result.a] << ", " <<
+                        BB_NAME(state.definitions[i]->owner) << ") ";
+            cout << endl;
+            cout << "Out_Rd : ";
+            for (int i = 0; i < def_count; ++i)
+                if (bb->out_rd[i])
+                    cout << "(" << state.str[state.definitions[i]->result.a] << ", " <<
+                        BB_NAME(state.definitions[i]->owner) << ") ";
+            cout << endl;
+        }
+    }
+    return 0;
+}
+
 int OPTION_LV(analysis_state& state, bool b)
 {
     map<basic_block*, string> tmp_names_for_bb;
@@ -777,22 +876,14 @@ void replace_var(operand& op, int before, int after, bool change_def = false)
     }
 }
 
-void delete_ins(analysis_state& state, instruction* ins)
-{
-    auto itr = state.instructions_list.begin();
-    while (*itr != ins) ++itr;
-    state.instructions_list.erase(itr);
-    itr = ins->owner->ins_list.begin();
-    while (*itr != ins) ++itr;
-    ins->owner->ins_list.erase(itr);
-    delete ins;
-}
-
 int OPTION_CP(analysis_state& state, bool b)
 {
     auto ins_list = state.definitions;
+    bool need_delete = false;
     for (auto ins : ins_list) {
-        OPTION_SETS(state, false);
+        if (need_delete)
+            OPTION_SETS(state, false);
+        need_delete = false;
         if (get_index(state.definitions, ins, false) == -1)
             continue;
         int us = state.du_chains.size();
@@ -805,7 +896,7 @@ int OPTION_CP(analysis_state& state, bool b)
         for (int i = 0;  i < us; ++i)
             if (ins->owner->du_out[i] && state.du_chains[i].second == ins->result.a)
                 get_index(uses, state.du_chains[i].first, true);
-        bool need_delete = !uses.empty();
+        need_delete = !uses.empty();
         for (auto uses_ins : uses) {
             if (uses_ins->owner->c_in[get_index(state.definitions, ins, false)] == false) {
                 need_delete = false;
@@ -842,6 +933,7 @@ int OPTION_CP(analysis_state& state, bool b)
                         replace_var(ins->exp.ops[1], before, after, true);
                 }
             delete_ins(state, ins);
+            state.changed = true;
         }
     }
     if (b)
@@ -862,14 +954,12 @@ int calculate_dominators(analysis_state& state, bool b)
     state.entry_bb->dom[get_index(state.bb_list, state.entry_bb, false)] = true;
     bool change = true;
     int iter_num = 0;
-    if (b)
-        cout << "Dominator computing:" << endl;
     while (change) {
         change = false;
         for (auto bb : state.bb_list) {
             if (bb == state.entry_bb)
                 continue;
-            bitvector tmp = bitvector(bb_count, true);
+            bitvector tmp = bitvector(bb_count, !bb->pred.empty());
             for (auto pred_bb : bb->pred)
                 tmp = tmp * pred_bb->dom;
             tmp[get_index(state.bb_list, bb, false)] = true;
@@ -894,43 +984,495 @@ int calculate_dominators(analysis_state& state, bool b)
     return 0;
 }
 
-void loops_search(vector<basic_block*> bb_list, basic_block* bb, bitvector& a)
-{
-    int ind = get_index(bb_list, bb, false);
-    if (!a[ind]) {
-        a[ind] = true;
-        for (auto pred_bb : bb->pred)
-            loops_search(bb_list, pred_bb, a);
-    }
-}
-
-vector<bitvector> get_natural_loops(analysis_state& state, bool b)
+map<basic_block*, bitvector> get_natural_loops(analysis_state& state, bool b)
 {
     map<basic_block*, string> tmp_names_for_bb;
     if (b)
         set_tmp_names_for_bb(state, tmp_names_for_bb);
 
     int bb_count = state.bb_list.size();
-    vector<bitvector> natural_loops;
+    map<basic_block*, bitvector> natural_loops;
     for (auto bb : state.bb_list)
         for (auto succ_bb : bb->succ) {
             int ind = get_index(state.bb_list, succ_bb, false);
             if (bb->dom[ind]) {
                 bitvector loop(bb_count);
+                stack<basic_block*> st;
                 loop[ind] = true;
-                loops_search(state.bb_list, bb, loop);
-                get_index(natural_loops, loop, true);
+                if (loop[ind = get_index(state.bb_list, bb, false)] != true) {
+                    loop[ind] = true;
+                    st.push(bb);
+                }
+                while (!st.empty()) {
+                    auto bbs = st.top();
+                    st.pop();
+                    for (auto bbp : bbs->pred)
+                        if (loop[ind = get_index(state.bb_list, bbp, false)] != true) {
+                            loop[ind] = true;
+                            st.push(bbp);
+                        }
+                }
+                if (natural_loops.count(succ_bb))
+                    natural_loops[succ_bb] = natural_loops[succ_bb] + loop;
+                else
+                    natural_loops[succ_bb] = loop;
             }
         }
     if (b)
         for (auto loop: natural_loops) {
-            cout << "Loop: ";
+            cout << "Header: " << BB_NAME(loop.first) << " Loop: ";
             for (int i = 0; i < bb_count; ++i)
-                if (loop[i])
+                if (loop.second[i])
                     cout << BB_NAME(state.bb_list[i]) << " ";
             cout << endl;
         }
     return natural_loops;
+}
+
+vector<instruction*> search_invariant_calculations(analysis_state& state, bitvector loop, bool b)
+{
+    map<basic_block*, string> tmp_names_for_bb;
+    if (b)
+        set_tmp_names_for_bb(state, tmp_names_for_bb);
+
+    map<int, vector<instruction*> > var_to_ins_list;
+    for (auto ins : state.instructions_list)
+        if (ins->type == UNARY || ins->type == BINARY)
+            var_to_ins_list[ins->result.a].push_back(ins);
+
+    vector<instruction*> invariant_ins;
+    vector<basic_block*> loop_bb;
+    for (int i = 0; i < state.bb_list.size(); ++i)
+        if (loop[i])
+            loop_bb.push_back(state.bb_list[i]);
+    bool change = true;
+    while (change) {
+        change = false;
+        for (auto bb : loop_bb) {
+            auto ud_chain = bb->in_rd;
+            for (auto ins : bb->ins_list) {
+                // only "VAR = VAR x VAR"
+                if (ins->type == BINARY) {
+                    if (get_index(invariant_ins, ins, false) > -1)
+                        continue;
+                    bool is_invariant = true;
+                    for (int i = 0; i < 2; ++i) {
+                        instruction* only_rd = NULL;
+                        if (ins->exp.ops[i].type == VAR_OPERAND)
+                            for (auto insl : var_to_ins_list[ins->exp.ops[i].a])
+                                if (ud_chain[get_index(state.definitions, insl, false)] &&
+                                    loop[get_index(state.bb_list, insl->owner, false)])
+                                        if (only_rd == NULL &&
+                                            get_index(invariant_ins, insl, false) > -1) {
+                                            only_rd = insl;
+                                        } else {
+                                            is_invariant = false;
+                                            break;
+                                        }
+                        if (!is_invariant)
+                            break;
+                    }
+                    if (is_invariant) {
+                        change = true;
+                        invariant_ins.push_back(ins);
+                    }
+                }
+                // fix ud_chain
+                if (ins->type == UNARY || ins->type == BINARY)
+                    for (auto insp : var_to_ins_list[ins->result.a])
+                        ud_chain[get_index(state.definitions, insp, false)] = (insp == ins);
+            }
+        }
+    }
+    if (b)
+        for (auto ins : invariant_ins) {
+            print_instruction(state.str, ins, true);
+            cout << endl;
+        }
+    return invariant_ins;
+}
+
+vector<tuple<instruction*, int, int, int, int> > search_induction_vars(analysis_state& state,
+                                                                       bitvector loop,
+                                                                       vector<instruction*> invariant_ins,
+                                                                       bool b)
+{
+    map<basic_block*, string> tmp_names_for_bb;
+    if (b)
+        set_tmp_names_for_bb(state, tmp_names_for_bb);
+
+    vector<basic_block*> loop_bb;
+    for (int i = 0; i < state.bb_list.size(); ++i)
+        if (loop[i])
+            loop_bb.push_back(state.bb_list[i]);
+
+    // parameters: instruction, variable, i, c, d
+    // variable -> (i, c, d)
+    vector<tuple<instruction*, int, int, int, int> > ind_vars;
+    // search basic induction variables
+    /* TODO: add use invariant_ins */
+    for (auto bb : loop_bb)
+        for (auto ins : bb->ins_list)
+            // only "VAR = VAR +- CONST"
+            if (ins->type == BINARY &&
+                (ins->exp.type == PLUS || ins->exp.type == MINUS) &&
+                ins->exp.ops[0].type == VAR_OPERAND &&
+                ins->result.a == ins->exp.ops[0].a &&
+                ins->exp.ops[1].type == CONST_OPERAND)
+                get_index(ind_vars, make_tuple(ins, ins->result.a, ins->result.a, 1, 0), true);
+
+    map<int, vector<instruction*> > var_to_ins_list;
+    for (auto bb : loop_bb)
+        for (auto ins : bb->ins_list)
+            if (ins->type == UNARY || ins->type == BINARY)
+                var_to_ins_list[ins->result.a].push_back(ins);
+
+    vector<instruction*> ins_list;
+    for (auto el : var_to_ins_list) {
+        // only one time defined variables
+        if (el.second.size() != 1)
+            continue;
+        auto ins = el.second[0];
+        if (ins->type != BINARY)
+            continue;
+        if (ins->exp.ops[0].type == VAR_OPERAND && ins->exp.ops[1].type == VAR_OPERAND ||
+            ins->exp.ops[0].type == CONST_OPERAND && ins->exp.ops[1].type == CONST_OPERAND)
+            continue;
+        if (ins->exp.type == DIVIDE &&
+            ins->exp.ops[0].type == CONST_OPERAND &&
+            ins->exp.ops[1].type == VAR_OPERAND)
+            continue;
+        int var = (ins->exp.ops[0].type == VAR_OPERAND) ? ins->exp.ops[0].a : ins->exp.ops[1].a;
+        if (ins->result.a == var)
+            continue;
+        ins_list.push_back(ins);
+    }
+
+    bool change = true;
+    while (change) {
+        change = false;
+        auto ins_it = ins_list.begin();
+        while (ins_it != ins_list.end()) {
+            int var = ((*ins_it)->exp.ops[0].type == VAR_OPERAND) ?
+                       (*ins_it)->exp.ops[0].a :
+                       (*ins_it)->exp.ops[1].a;
+            auto ind_var = find_if(ind_vars.begin(), ind_vars.end(),
+                                   [var](tuple<instruction*, int, int, int, int> a){
+                                        return get<1>(a) == var;
+                                   });
+            if (ind_var == ind_vars.end()) {
+                ++ins_it;
+                continue;
+            }
+            int con = ((*ins_it)->exp.ops[0].type == CONST_OPERAND) ?
+                       (*ins_it)->exp.ops[0].a :
+                       (*ins_it)->exp.ops[1].a;
+            int c = get<3>(*ind_var), d = get<4>(*ind_var);
+            if (get<2>(*ind_var) != var) { // not basic induction variable
+                // calculate ud_chain
+                auto ud_chain = (*ins_it)->owner->in_rd;
+                auto lst = (*ins_it)->owner->ins_list;
+                auto it = lst.begin();
+                while (*it != *ins_it) {
+                    if ((*it)->type == UNARY || (*it)->type == BINARY)
+                        for (auto insp : var_to_ins_list[(*it)->result.a])
+                            ud_chain[get_index(state.definitions, insp, false)] = (insp == *it);
+                    ++it;
+                }
+
+                // check defs j which outside L
+                bool failed = false;
+                for (int i = 0; i < state.definitions.size(); ++i)
+                    if (ud_chain[i] &&
+                        state.definitions[i]->result.a == var &&
+                        loop[get_index(state.bb_list, state.definitions[i]->owner, false)] == false) {
+                        ins_it = ins_list.erase(ins_it);
+                        failed = true;
+                        break;
+                    }
+                if (failed)
+                    continue;
+
+                //check no def i between def j and def k
+                bool simple_check = true;
+                if ((*ins_it)->owner == get<0>(*ind_var)->owner) {
+                    it = lst.begin();
+                    while (*it != *ins_it && *it != get<0>(*ind_var))
+                        ++it;
+                    simple_check = (*it == get<0>(*ind_var));
+                }
+
+                if (simple_check) { // defs j and k in one basic block
+                    ++it;
+                    while (*it != *ins_it)
+                        if (((*it)->type == UNARY || (*it)->type == BINARY) &&
+                            (*it)->result.a == get<2>(*ind_var)) {
+                            ins_it = ins_list.erase(ins_it);
+                            failed = true;
+                            break;
+                        }
+                    if (failed)
+                        continue;
+                } else {
+                    // check that before def k in bb_k no def i
+                    it = lst.begin();
+                    while (*it != *ins_it)
+                        if (((*it)->type == UNARY || (*it)->type == BINARY) &&
+                            (*it)->result.a == get<2>(*ind_var)) {
+                            ins_it = ins_list.erase(ins_it);
+                            failed = true;
+                            break;
+                        }
+                    if (failed)
+                        continue;
+                    lst = get<0>(*ind_var)->owner->ins_list;
+                    it = lst.begin();
+                    while (*it != get<0>(*ind_var))
+                        ++it;
+
+                    // check that after def j in bb_j no def i
+                    while (it != lst.end())
+                        if (((*it)->type == UNARY || (*it)->type == BINARY) &&
+                            (*it)->result.a == get<2>(*ind_var)) {
+                            ins_it = ins_list.erase(ins_it);
+                            failed = true;
+                            break;
+                        }
+                    if (failed)
+                        continue;
+
+                    // check that no defs i between
+                    auto ind_j = get_index(state.definitions, get<0>(*ind_var), false);
+                    queue<basic_block*> bb_to_check;
+                    for (auto bb : (*ins_it)->owner->pred)
+                        if (bb->out_rd[ind_j])
+                            if (bb == get<0>(*ind_var)->owner) {
+                             bb_to_check = {};
+                             break;
+                            } else
+                                bb_to_check.push(bb);
+                    while (!bb_to_check.empty()) {
+                        basic_block* bb = bb_to_check.front();
+                        bb_to_check.pop();
+                        for (int i = 0; i < state.definitions.size(); ++i)
+                            if (bb->out_rd[i] &&
+                                state.definitions[i]->owner == bb &&
+                                state.definitions[i]->result.a == get<2>(*ind_var)) {
+                                ins_it = ins_list.erase(ins_it);
+                                failed = true;
+                                break;
+                            }
+                        if (failed)
+                            break;
+                        for (auto bbs : bb->pred)
+                            if (bbs->out_rd[ind_j])
+                                if (bbs == get<0>(*ind_var)->owner) {
+                                    bb_to_check = {};
+                                    break;
+                            } else
+                                bb_to_check.push(bb);
+
+                    }
+                    if (failed)
+                        continue;
+                }
+
+                // fix var
+                var = get<2>(*ind_var);
+            }
+            if ((*ins_it)->exp.type == MULTIPLY)
+                get_index(ind_vars, make_tuple(*ins_it, (*ins_it)->result.a, var, c * con, d), true);
+            else if ((*ins_it)->exp.type == DIVIDE)
+                /* TODO check - maybe some problems */
+                get_index(ind_vars, make_tuple(*ins_it, (*ins_it)->result.a, var, c / con, d), true);
+            else {// PLUS or MINUS
+                int m = ((*ins_it)->exp.type ==PLUS) ? 1 : -1;
+                if ((*ins_it)->exp.ops[0].type == VAR_OPERAND)
+                    get_index(ind_vars, make_tuple(*ins_it, (*ins_it)->result.a, var, c, d + m * con), true);
+                else
+                    get_index(ind_vars, make_tuple(*ins_it, (*ins_it)->result.a, var, m * c, d + con), true);
+            }
+            change = true;
+            ins_it = ins_list.erase(ins_it);
+        }
+    }
+    if (b) {
+        cout << "Ins in BB - {var -> (i, c, d)}" << endl;
+        for (auto var_info : ind_vars) {
+            print_instruction(state.str, get<0>(var_info), true);
+            cout << " in " << BB_NAME(get<0>(var_info)->owner) <<
+                    " - {" << state.str[get<1>(var_info)] <<
+                    " -> (" << state.str[get<2>(var_info)] <<
+                    ", " << get<3>(var_info) <<
+                    ", " << get<4>(var_info) <<
+                    ")}" << endl;
+        }
+    }
+    return ind_vars;
+}
+
+int add_bb_before(analysis_state& state, basic_block* bb)
+{
+    basic_block* preh = new basic_block;
+    int ind;
+    state.bb_list.push_back(preh);
+    preh->pred = bb->pred;
+    bb->pred = {preh};
+    preh->succ = {bb};
+    for (auto pred_bb : preh->pred)
+        while ((ind = get_index(pred_bb->succ, bb, false)) > -1)
+            pred_bb->succ[ind] = preh;
+    return 0;
+}
+
+int OPTION_SR(analysis_state& state, bool b)
+{
+    /* TODO fix that calls */
+    auto loops = get_natural_loops(state, false);
+    // add preheaders
+    for (auto loop : loops)
+        add_bb_before(state, loop.first);
+    OPTION_SETS(state, false);
+    OPTION_RD(state, false);
+    calculate_dominators(state, false);
+    loops = get_natural_loops(state, false);
+    vector <pair<basic_block*, bitvector> > loops_vect;
+    for_each(loops.begin(), loops.end(),
+        [&loops_vect](const pair<basic_block*, bitvector>& p){loops_vect.push_back(p);});
+    sort(loops_vect.begin(), loops_vect.end(),
+        [](const pair<basic_block*, bitvector>& a, const pair<basic_block*, bitvector>& b) -> bool {
+        return (a.second * b.second == a.second);});
+
+    int var_counter = 0;
+    for (auto loop : loops_vect) {
+        /* TODO fix that calls */
+        OPTION_SETS(state, false);
+        OPTION_RD(state, false);
+
+        auto invariant_ins = search_invariant_calculations(state, loop.second, false);
+        auto induction_vars = search_induction_vars(state, loop.second, invariant_ins, false);
+
+        map<int, pair<vector<instruction*>, map<pair<int, int>, vector<instruction*> > > > conv_ind_vars;
+        for (auto ind_var : induction_vars)
+            if (get<1>(ind_var) == get<2>(ind_var))
+                conv_ind_vars[get<1>(ind_var)].first.push_back(get<0>(ind_var));
+            else
+                conv_ind_vars[get<2>(ind_var)].second[make_pair(get<3>(ind_var), get<4>(ind_var))].push_back(get<0>(ind_var));
+
+        for (auto i : conv_ind_vars) {
+            for (auto j : i.second.second) {
+                ++var_counter;
+                ostringstream ss;
+                ss << "sr" << var_counter;
+                while (get_index(state.str, ss.str(), false) > -1) {
+                    ss.clear();
+                    ss.str("");
+                    ++var_counter;
+                    ss << "sr" << var_counter;
+                }
+                int var_id = get_index(state.str, ss.str(), true);
+                for (auto ins : j.second) {
+                    ins->type = UNARY;
+                    ins->exp.ops[0].type = VAR_OPERAND;
+                    ins->exp.ops[0].a = var_id;
+                }
+                for (auto ins : i.second.first) {
+                    // create new instruction
+                    instruction* insert_ins = new instruction;
+                    insert_ins->owner = ins->owner;
+                    insert_ins->type = BINARY;
+                    insert_ins->result.type = VAR_OPERAND;
+                    insert_ins->result.a = var_id;
+                    insert_ins->exp.ops[0].type = VAR_OPERAND;
+                    insert_ins->exp.ops[0].a = var_id;
+                    insert_ins->exp.ops[1].type = CONST_OPERAND;
+                    int con = ins->exp.ops[1].a * j.first.first * (ins->exp.type == PLUS ? 1 : -1);
+                    insert_ins->exp.type = (con > 0) ? PLUS : MINUS;
+                    insert_ins->exp.ops[1].a = abs(con);
+
+                    // insert new instruction
+                    auto itr = state.instructions_list.begin();
+                    while (*itr != ins) ++itr;
+                    state.instructions_list.insert(++itr, insert_ins);
+                    itr = ins->owner->ins_list.begin();
+                    while (*itr != ins) ++itr;
+                    ins->owner->ins_list.insert(++itr, insert_ins);
+
+                    /* TODO add s into conv_ind_vars or not? */
+                }
+
+                // after insert preheaders loop.first is preheader
+                auto preheader = loop.first;
+
+                // create new instruction
+                instruction* insert_ins = new instruction;
+                insert_ins->owner = preheader;
+                insert_ins->result.type = VAR_OPERAND;
+                insert_ins->result.a = var_id;
+                int c = j.first.first;
+                if (c == 1) {
+                    insert_ins->type = UNARY;
+                    insert_ins->exp.ops[0].type = VAR_OPERAND;
+                    insert_ins->exp.ops[0].a = i.first;
+                } else {
+                    insert_ins->type = BINARY;
+                    insert_ins->exp.type = MULTIPLY;
+                    insert_ins->exp.ops[0].type = CONST_OPERAND;
+                    insert_ins->exp.ops[0].a = j.first.first;
+                    insert_ins->exp.ops[1].type = VAR_OPERAND;
+                    insert_ins->exp.ops[1].a = i.first;
+                }
+
+                // insert new instruction
+                /* TODO insert in right place of instructions_list */
+                state.instructions_list.push_back(insert_ins);
+                preheader->ins_list.push_back(insert_ins);
+
+                int d = j.first.second;
+                if (d) {
+                    // create new instruction
+                    insert_ins = new instruction;
+                    insert_ins->owner = preheader;
+                    insert_ins->result.type = VAR_OPERAND;
+                    insert_ins->result.a = var_id;
+                    insert_ins->type = BINARY;
+                    insert_ins->exp.type = (d > 0) ? PLUS : MINUS;
+                    insert_ins->exp.ops[0].type = VAR_OPERAND;
+                    insert_ins->exp.ops[0].a = var_id;
+                    insert_ins->exp.ops[1].type = CONST_OPERAND;
+                    insert_ins->exp.ops[1].a = abs(d);
+
+                    // insert new instruction
+                    /* TODO insert in right place of instructions_list */
+                    state.instructions_list.push_back(insert_ins);
+                    preheader->ins_list.push_back(insert_ins);
+                }
+
+                state.changed = true;
+            }
+        }
+    }
+    merge_bbs(state);
+    if (b)
+        OPTION_FG(state, true);
+    return 0;
+}
+
+int OPTION_IVE(analysis_state& state, bool b)
+{
+    map<basic_block*, string> tmp_names_for_bb;
+    if (b)
+        set_tmp_names_for_bb(state, tmp_names_for_bb);
+
+    auto loops = get_natural_loops(state, false);
+    for (auto loop : loops) {
+        auto invariant_ins = search_invariant_calculations(state, loop.second, false);
+
+        /* TODO add realization */
+
+        // state.changed = true;
+    }
+    return 0;
 }
 
 int split_bbs(analysis_state& state)
@@ -967,54 +1509,32 @@ int split_bbs(analysis_state& state)
     return 0;
 }
 
-int merge_bbs(analysis_state& state)
-{
-    vector<basic_block*>  new_bb_list;
-    vector<basic_block*> deleted_bbs;
-    for (auto bb : state.bb_list) {
-        if (get_index(deleted_bbs, bb, false) > -1)
-            continue;
-        new_bb_list.push_back(bb);
-        if (bb == state.entry_bb || bb == state.exit_bb)
-            continue;
-        while (bb->succ.size() == 1 &&
-               bb->succ[0]->pred.size() == 1 &&
-               bb->succ[0] != state.exit_bb) {
-            auto next_bb = bb->succ[0];
-            get_index(deleted_bbs, next_bb, true);
-            bb->succ = next_bb->succ;
-            int ind;
-            for (auto succ_bb : bb->succ)
-                while ((ind = get_index(succ_bb->pred, next_bb, false)) > -1)
-                    succ_bb->pred[ind] = bb;
-            instruction* ins;
-            if (!bb->ins_list.empty() &&
-                (ins = *(bb->ins_list.end() - 1))->type == UNCOND)
-                delete_ins(state, ins);
-            for (auto ins : next_bb->ins_list) {
-                bb->ins_list.push_back(ins);
-                ins->owner = bb;
-            }
-            delete next_bb;
-        }
-    }
-    state.bb_list = new_bb_list;
-    return 0;
-}
-
 int OPTION_TASK1(analysis_state& state, bool b)
 {
-    OPTION_SETS(state, false);
-    OPTION_AE(state, false);
-    OPTION_CSE(state, false);
-    split_bbs(state);
-    OPTION_SETS(state, false);
-    OPTION_CP(state, false);
-    merge_bbs(state);
+    state.changed = true;
+    while (state.changed) {
+        state.changed = false;
 
-    OPTION_SETS(state, false);
-    calculate_dominators(state, true);
-    get_natural_loops(state, true);
+        OPTION_SETS(state, false);
+        OPTION_AE(state, false);
+        OPTION_CSE(state, false);
+
+        split_bbs(state);
+        OPTION_SETS(state, false);
+        OPTION_CP(state, false);
+        merge_bbs(state);
+
+        OPTION_SETS(state, false);
+        OPTION_RD(state, false);
+        calculate_dominators(state, false);
+        OPTION_SR(state, false);
+
+        OPTION_SETS(state, false);
+        OPTION_RD(state, false);
+        OPTION_LV(state, false);
+        calculate_dominators(state, false);
+        OPTION_IVE(state, false);
+    }
     if (b)
         OPTION_FG(state, true);
     return 0;
@@ -1058,7 +1578,8 @@ int main(int argc, char* argv[])
                 << "\t-u,-usage\tShow a short usage message\n"
                 << "\t< <INPUTFILE>\tRead from INPUTFILE\n"
                 << "\t> <OUTPUTFILE>\tWrite to OUTPUTFILE\n"
-                << "\t-dfst\t\tUse DFST algorithm for BBs numeration (not work)\n" //fixme
+                /* TODO: add dfst */
+                << "\t-dfst\t\tUse DFST algorithm for BBs numeration (not work)\n"
                 << "\t-ALL\t\tPrint all (union of all the following flags)\n"
                 #define GENERATE_HELP
                 #include "options-wrapper.h"
