@@ -63,7 +63,7 @@ int parse_operation(const string& s, instruction* ins)
     return 1;
 }
 
-int parse_input(analysis_state& state)
+int parse_input(analysis_state& state, int user_friendly = 0)
 {
     int mode = 0; // tracking of multiline instructions
     vector<string> label_str;
@@ -75,7 +75,10 @@ int parse_input(analysis_state& state)
         line = line.substr(0, line.find("//"));
         istringstream iss(line);
         vector<string> tokens{istream_iterator<string>{iss}, istream_iterator<string>{}};
-        switch (tokens.size()) {
+        int count = tokens.size();
+        if (count)
+            count += user_friendly;
+        switch (count) {
             case 0:
                 // empty
                 break;
@@ -191,9 +194,9 @@ int parse_input(analysis_state& state)
                 ins = new instruction;
                 ins->type = BINARY;
                 if (parse_operand(state.str, tokens[0], ins->result) ||
-                    parse_operand(state.str, tokens[3], ins->exp.ops[0]) ||
+                    parse_operand(state.str, tokens[3 - user_friendly], ins->exp.ops[0]) ||
                     parse_operand(state.str, tokens[4], ins->exp.ops[1]) ||
-                    parse_operation(tokens[2], ins)) {
+                    parse_operation(tokens[2 + user_friendly], ins)) {
                     cerr << tokens.size() << ":'" << line << "' - parse error" << endl;
                     delete ins;
                     return 1;

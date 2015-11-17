@@ -3,6 +3,6 @@
 
 #include "types.h"
 
-int parse_input(analysis_state& state);
+int parse_input(analysis_state&, int);
 
 #endif // PARSER_H

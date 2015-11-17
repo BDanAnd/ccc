@@ -1545,7 +1545,7 @@ int main(int argc, char* argv[])
     analysis_state state;
 
     //parse args
-    int use_dfst = 0, all = 0;
+    int use_dfst = 0, all = 0, user_friendly = 0;
     #define GENERATE_FLAGS
     #include "options-wrapper.h"
 
@@ -1556,6 +1556,7 @@ int main(int argc, char* argv[])
             { "help", no_argument, 0, 'h' },
             { "usage", no_argument, 0, 'u' },
             { "dfst", no_argument, &use_dfst, 1 },
+            { "friendly", no_argument, &user_friendly, 1 },
             { "ALL", no_argument, &all, 1 },
             #define GENERATE_OPTIONS
             #include "options-wrapper.h"
@@ -1580,6 +1581,7 @@ int main(int argc, char* argv[])
                 << "\t> <OUTPUTFILE>\tWrite to OUTPUTFILE\n"
                 /* TODO: add dfst */
                 << "\t-dfst\t\tUse DFST algorithm for BBs numeration (not work)\n"
+                << "\t-friendly\t\tEnable user friendly input\n"
                 << "\t-ALL\t\tPrint all (union of all the following flags)\n"
                 #define GENERATE_HELP
                 #include "options-wrapper.h"
@@ -1611,7 +1613,7 @@ int main(int argc, char* argv[])
         #include "options-wrapper.h"
         1;
 
-    if (parse_input(state)) {
+    if (parse_input(state, user_friendly)) {
         free_memory(state);
         return 1;
     }
