@@ -170,17 +170,16 @@ int OPTION_CP(analysis_state& state, bool b)
 int OPTION_SR(analysis_state& state, bool b)
 {
     /* TODO fix that calls */
-    auto loops = get_natural_loops(state, false);
     // add preheaders
-    for (auto loop : loops)
+    for (auto loop : state.natural_loops)
         add_bb_before(state, loop.first);
     OPTION_SETS(state, false);
     OPTION_RD(state, false);
     OPTION_CD(state, false);
+    OPTION_NL(state, false);
 
-    loops = get_natural_loops(state, false);
     vector <pair<basic_block*, bitvector> > loops_vect;
-    for_each(loops.begin(), loops.end(),
+    for_each(state.natural_loops.begin(), state.natural_loops.end(),
         [&loops_vect](const pair<basic_block*, bitvector>& p){loops_vect.push_back(p);});
     sort(loops_vect.begin(), loops_vect.end(),
         [](const pair<basic_block*, bitvector>& a, const pair<basic_block*, bitvector>& b) -> bool {
@@ -301,8 +300,7 @@ int OPTION_SR(analysis_state& state, bool b)
 
 int OPTION_IVE(analysis_state& state, bool b)
 {
-    auto loops = get_natural_loops(state, false);
-    for (auto loop : loops) {
+    for (auto loop : state.natural_loops) {
         auto invariant_ins = search_invariant_calculations(state, loop.second, false);
 
         /* TODO add realization */

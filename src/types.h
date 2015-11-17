@@ -130,6 +130,7 @@ struct analysis_state
     vector<instruction*> definitions;
     vector<expression> expressions;
     vector<pair<instruction*, int> > du_chains;
+    map<basic_block*, bitvector> natural_loops;
 
     basic_block* entry_bb = NULL;
     basic_block* exit_bb = NULL;

@@ -146,11 +146,12 @@ int call_functions(analysis_state& state,
                 can_done = false;
             }
         if (can_done) {
-            if (need_print)
+            bool print = need_print && all_functions[cur_func].used;
+            if (print)
                 cout << "------OPT \"" << all_functions[cur_func].name << "\" STARTS" << endl;
-            if (cur_func(state, need_print && all_functions[cur_func].used))
+            if (cur_func(state, print))
                 return 1;
-            if (need_print)
+            if (print)
                 cout << "------OPT \"" << all_functions[cur_func].name << "\" ENDS" << endl;
             all_functions[cur_func].done = true;
         } else

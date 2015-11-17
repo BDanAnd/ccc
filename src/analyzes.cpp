@@ -531,14 +531,14 @@ int OPTION_CD(analysis_state& state, bool b)
     return 0;
 }
 
-map<basic_block*, bitvector> get_natural_loops(analysis_state& state, bool b)
+int OPTION_NL(analysis_state& state, bool b)
 {
     map<basic_block*, string> tmp_names_for_bb;
     if (b)
         set_tmp_names_for_bb(state, tmp_names_for_bb);
 
     int bb_count = state.bb_list.size();
-    map<basic_block*, bitvector> natural_loops;
+    state.natural_loops = {};
     for (auto bb : state.bb_list)
         for (auto succ_bb : bb->succ) {
             int ind = get_index(state.bb_list, succ_bb, false);
@@ -559,21 +559,21 @@ map<basic_block*, bitvector> get_natural_loops(analysis_state& state, bool b)
                             st.push(bbp);
                         }
                 }
-                if (natural_loops.count(succ_bb))
-                    natural_loops[succ_bb] = natural_loops[succ_bb] + loop;
+                if (state.natural_loops.count(succ_bb))
+                    state.natural_loops[succ_bb] = state.natural_loops[succ_bb] + loop;
                 else
-                    natural_loops[succ_bb] = loop;
+                    state.natural_loops[succ_bb] = loop;
             }
         }
     if (b)
-        for (auto loop: natural_loops) {
+        for (auto loop: state.natural_loops) {
             cout << "Header: " << BB_NAME(loop.first) << " Loop: ";
             for (int i = 0; i < bb_count; ++i)
                 if (loop.second[i])
                     cout << BB_NAME(state.bb_list[i]) << " ";
             cout << endl;
         }
-    return natural_loops;
+    return 0;
 }
 
 vector<instruction*> search_invariant_calculations(analysis_state& state, bitvector loop, bool b)
