@@ -139,13 +139,19 @@ struct analysis_state
 
 typedef int (*func_ptr)(analysis_state&, bool);
 
+enum func_type {
+    PRINTER,
+    ANALYSIS,
+    OPTIMIZATION
+};
+
 struct func_props
 {
+    func_type type;
     bool done;
     bool used;
-    bool need_print;
     string name;
-    vector<func_ptr> dependences;
+    vector<func_ptr> dependences, dependents, invalidated;
 };
 
 template<typename T>

@@ -119,6 +119,41 @@ void delete_ins(analysis_state& state, instruction* ins)
     delete ins;
 }
 
+
+int split_bbs(analysis_state& state)
+{
+    vector<basic_block*>  new_bb_list;
+    for (auto bb : state.bb_list) {
+        new_bb_list.push_back(bb);
+        if (bb == state.entry_bb || bb == state.exit_bb || bb->ins_list.size() < 2)
+            continue;
+        auto itr = bb->ins_list.begin();
+        auto old_succ = bb->succ;
+        bb->succ.clear();
+        ++itr; // first ins not modified
+        basic_block* old_bb = bb;
+        basic_block* new_bb;
+        while (itr != bb->ins_list.end()) {
+            new_bb = new basic_block;
+            new_bb_list.push_back(new_bb);
+            new_bb->pred.push_back(old_bb);
+            old_bb->succ.push_back(new_bb);
+            new_bb->ins_list.push_back(*itr);
+            (*itr)->owner = new_bb;
+            ++itr;
+            old_bb = new_bb;
+        }
+        bb->ins_list.erase(bb->ins_list.begin() + 1, bb->ins_list.end());
+        new_bb->succ = old_succ;
+        int ind;
+        for (auto succ_bb : new_bb->succ)
+            while ((ind = get_index(succ_bb->pred, bb, false)) > -1)
+                succ_bb->pred[ind] = new_bb;
+    }
+    state.bb_list = new_bb_list;
+    return 0;
+}
+
 int merge_bbs(analysis_state& state)
 {
     bool change = true;
@@ -173,7 +208,7 @@ int OPTION_IR(analysis_state& state, bool b)
     for (auto bb : state.bb_list) {
         if (bb == state.entry_bb || bb == state.exit_bb)
             continue;
-        cout << BB_NAME(bb) << ":" << endl;
+        cout << BB_NAME(bb) << endl;
         for (auto i : bb->ins_list) {
             switch (i->type) {
                 case UNARY:
@@ -207,6 +242,7 @@ int OPTION_IR(analysis_state& state, bool b)
                     cout << endl;
             }
         }
+        cout << endl;
     }
     return 0;
 }
@@ -768,6 +804,49 @@ int OPTION_AE(analysis_state& state, bool b)
     return 0;
 }
 
+int OPTION_CD(analysis_state& state, bool b)
+{
+    map<basic_block*, string> tmp_names_for_bb;
+    if (b)
+        set_tmp_names_for_bb(state, tmp_names_for_bb);
+
+    int bb_count = state.bb_list.size();
+    for (auto bb : state.bb_list)
+        bb->dom = bitvector(bb_count, true);
+    state.entry_bb->dom = bitvector(bb_count);
+    state.entry_bb->dom[get_index(state.bb_list, state.entry_bb, false)] = true;
+    bool change = true;
+    int iter_num = 0;
+    while (change) {
+        change = false;
+        for (auto bb : state.bb_list) {
+            if (bb == state.entry_bb)
+                continue;
+            bitvector tmp = bitvector(bb_count, !bb->pred.empty());
+            for (auto pred_bb : bb->pred)
+                tmp = tmp * pred_bb->dom;
+            tmp[get_index(state.bb_list, bb, false)] = true;
+            if (!(tmp == bb->dom)) {
+                bb->dom = tmp;
+                change = true;
+            }
+        }
+        if (!b)
+            continue;
+        cout << endl << "Iter num: " << ++iter_num << endl;
+        for (auto bb : state.bb_list) {
+            cout << BB_NAME(bb) << " dom - ";
+            for (int i = 0; i < bb_count; ++i)
+                if (bb->dom[i])
+                    cout << BB_NAME(state.bb_list[i]) << " ";
+            cout << endl;
+        }
+    }
+    if (b)
+        cout << endl;
+    return 0;
+}
+
 int OPTION_CSE(analysis_state& state, bool b)
 {
     bool change = true;
@@ -859,8 +938,6 @@ int OPTION_CSE(analysis_state& state, bool b)
             }
         }
     }
-    if (b)
-        OPTION_FG(state, true);
     return 0;
 }
 
@@ -878,6 +955,10 @@ void replace_var(operand& op, int before, int after, bool change_def = false)
 
 int OPTION_CP(analysis_state& state, bool b)
 {
+    /* TODO fix that calls */
+    split_bbs(state);
+    OPTION_SETS(state, false);
+
     auto ins_list = state.definitions;
     bool need_delete = false;
     for (auto ins : ins_list) {
@@ -936,51 +1017,10 @@ int OPTION_CP(analysis_state& state, bool b)
             state.changed = true;
         }
     }
-    if (b)
-        OPTION_FG(state, true);
-    return 0;
-}
 
-int calculate_dominators(analysis_state& state, bool b)
-{
-    map<basic_block*, string> tmp_names_for_bb;
-    if (b)
-        set_tmp_names_for_bb(state, tmp_names_for_bb);
+    /* TODO fix that call */
+    merge_bbs(state);
 
-    int bb_count = state.bb_list.size();
-    for (auto bb : state.bb_list)
-        bb->dom = bitvector(bb_count, true);
-    state.entry_bb->dom = bitvector(bb_count);
-    state.entry_bb->dom[get_index(state.bb_list, state.entry_bb, false)] = true;
-    bool change = true;
-    int iter_num = 0;
-    while (change) {
-        change = false;
-        for (auto bb : state.bb_list) {
-            if (bb == state.entry_bb)
-                continue;
-            bitvector tmp = bitvector(bb_count, !bb->pred.empty());
-            for (auto pred_bb : bb->pred)
-                tmp = tmp * pred_bb->dom;
-            tmp[get_index(state.bb_list, bb, false)] = true;
-            if (!(tmp == bb->dom)) {
-                bb->dom = tmp;
-                change = true;
-            }
-        }
-        if (!b)
-            continue;
-        cout << endl << "Iter num: " << ++iter_num << endl;
-        for (auto bb : state.bb_list) {
-            cout << BB_NAME(bb) << " dom - ";
-            for (int i = 0; i < bb_count; ++i)
-                if (bb->dom[i])
-                    cout << BB_NAME(state.bb_list[i]) << " ";
-            cout << endl;
-        }
-    }
-    if (b)
-        cout << endl;
     return 0;
 }
 
@@ -1334,7 +1374,8 @@ int OPTION_SR(analysis_state& state, bool b)
         add_bb_before(state, loop.first);
     OPTION_SETS(state, false);
     OPTION_RD(state, false);
-    calculate_dominators(state, false);
+    OPTION_CD(state, false);
+
     loops = get_natural_loops(state, false);
     vector <pair<basic_block*, bitvector> > loops_vect;
     for_each(loops.begin(), loops.end(),
@@ -1452,18 +1493,12 @@ int OPTION_SR(analysis_state& state, bool b)
             }
         }
     }
-    merge_bbs(state);
-    if (b)
-        OPTION_FG(state, true);
+    merge_bbs(state); // merge preheaders
     return 0;
 }
 
 int OPTION_IVE(analysis_state& state, bool b)
 {
-    map<basic_block*, string> tmp_names_for_bb;
-    if (b)
-        set_tmp_names_for_bb(state, tmp_names_for_bb);
-
     auto loops = get_natural_loops(state, false);
     for (auto loop : loops) {
         auto invariant_ins = search_invariant_calculations(state, loop.second, false);
@@ -1475,68 +1510,33 @@ int OPTION_IVE(analysis_state& state, bool b)
     return 0;
 }
 
-int split_bbs(analysis_state& state)
+int call_functions(analysis_state& state,
+                   queue<func_ptr> necessary_functions,
+                   map<func_ptr, func_props>& all_functions,
+                   bool need_print = true)
 {
-    vector<basic_block*>  new_bb_list;
-    for (auto bb : state.bb_list) {
-        new_bb_list.push_back(bb);
-        if (bb == state.entry_bb || bb == state.exit_bb || bb->ins_list.size() < 2)
+    while (!necessary_functions.empty()) {
+        func_ptr cur_func = necessary_functions.front();
+        necessary_functions.pop();
+        if (all_functions[cur_func].done)
             continue;
-        auto itr = bb->ins_list.begin();
-        auto old_succ = bb->succ;
-        bb->succ.clear();
-        ++itr; // first ins not modified
-        basic_block* old_bb = bb;
-        basic_block* new_bb;
-        while (itr != bb->ins_list.end()) {
-            new_bb = new basic_block;
-            new_bb_list.push_back(new_bb);
-            new_bb->pred.push_back(old_bb);
-            old_bb->succ.push_back(new_bb);
-            new_bb->ins_list.push_back(*itr);
-            (*itr)->owner = new_bb;
-            ++itr;
-            old_bb = new_bb;
-        }
-        bb->ins_list.erase(bb->ins_list.begin() + 1, bb->ins_list.end());
-        new_bb->succ = old_succ;
-        int ind;
-        for (auto succ_bb : new_bb->succ)
-            while ((ind = get_index(succ_bb->pred, bb, false)) > -1)
-                succ_bb->pred[ind] = new_bb;
+        bool can_done = true;
+        for (auto& func : all_functions[cur_func].dependences)
+            if (!all_functions[func].done) {
+                necessary_functions.push(func);
+                can_done = false;
+            }
+        if (can_done) {
+            if (need_print)
+                cout << "------OPT \"" << all_functions[cur_func].name << "\" STARTS" << endl;
+            if (cur_func(state, need_print && all_functions[cur_func].used))
+                return 1;
+            if (need_print)
+                cout << "------OPT \"" << all_functions[cur_func].name << "\" ENDS" << endl;
+            all_functions[cur_func].done = true;
+        } else
+            necessary_functions.push(cur_func);
     }
-    state.bb_list = new_bb_list;
-    return 0;
-}
-
-int OPTION_TASK1(analysis_state& state, bool b)
-{
-    state.changed = true;
-    while (state.changed) {
-        state.changed = false;
-
-        OPTION_SETS(state, false);
-        OPTION_AE(state, false);
-        OPTION_CSE(state, false);
-
-        split_bbs(state);
-        OPTION_SETS(state, false);
-        OPTION_CP(state, false);
-        merge_bbs(state);
-
-        OPTION_SETS(state, false);
-        OPTION_RD(state, false);
-        calculate_dominators(state, false);
-        OPTION_SR(state, false);
-
-        OPTION_SETS(state, false);
-        OPTION_RD(state, false);
-        OPTION_LV(state, false);
-        calculate_dominators(state, false);
-        OPTION_IVE(state, false);
-    }
-    if (b)
-        OPTION_FG(state, true);
     return 0;
 }
 
@@ -1620,45 +1620,127 @@ int main(int argc, char* argv[])
     map<func_ptr, func_props> all_functions;
     #define GENERATE_FUNCTIONS_PROPS
     #include "options-wrapper.h"
+    #define GENERATE_NECESSARY_FUNCTIONS
+    #include "options-wrapper.h"
 
-    // check circular dependences
-    for (auto& func : all_functions)
+    queue<func_ptr> printer_functions,
+                    analysis_functions;
+    vector<func_ptr> optimization_functions;
+
+    for (auto& func : all_functions) {
+        // check circular dependences
         if (check_circular_dependencies(all_functions, func.first, {})) {
             cerr << "Error: Circular dependency found" << endl;
             free_memory(state);
             return 1;
         }
-
-    #define GENERATE_NECESSARY_FUNCTIONS
-    #include "options-wrapper.h"
-    queue<func_ptr> necessary_functions;
-    for (auto& func : all_functions)
-        if (func.second.used)
-            necessary_functions.push(func.first);
-
-    // call functions for the selected opts in the right order
-    while (!necessary_functions.empty()) {
-        func_ptr cur_func = necessary_functions.front();
-        necessary_functions.pop();
-        bool can_done = true;
-        for (auto& func : all_functions[cur_func].dependences) {
-            if (!all_functions[func].used) {
-                all_functions[func].used = true;
-                necessary_functions.push(func);
-            }
-            if (!all_functions[func].done)
-                can_done = false;
+        // fill dependents
+        for (auto& depfunc : func.second.dependences)
+            all_functions[depfunc].dependents.push_back(func.first);
+        // check dependences and invalidated for illegal funcs
+        switch (func.second.type) {
+            case PRINTER:
+                if (func.second.used)
+                    printer_functions.push(func.first);
+                if (!func.second.dependences.empty() || !func.second.invalidated.empty()) {
+                    cerr << "Error: Printer option can't have dependences or invalidate" << endl;
+                    free_memory(state);
+                    return 1;
+                }
+                break;
+            case ANALYSIS:
+                if (func.second.used)
+                    analysis_functions.push(func.first);
+                for (auto& depfunc : func.second.dependences)
+                    if (all_functions[depfunc].type != ANALYSIS) {
+                        cerr << "Error: Analysis option may depend only on analysis options" << endl;
+                        free_memory(state);
+                        return 1;
+                    }
+                if (!func.second.invalidated.empty()) {
+                    cerr << "Error: Analysis option can't invalidate" << endl;
+                    free_memory(state);
+                    return 1;
+                }
+                break;
+            case OPTIMIZATION:
+                if (func.second.used)
+                    optimization_functions.push_back(func.first);
+                for (auto& depfunc : func.second.dependences)
+                    if (all_functions[depfunc].type != ANALYSIS) {
+                            cerr << func.second.name << endl;
+                        cerr << "Error: Optimization option may depend only on analysis options" << endl;
+                        free_memory(state);
+                        return 1;
+                    }
+                for (auto& invfunc : func.second.invalidated)
+                    if (all_functions[invfunc].type != ANALYSIS) {
+                        cerr << "Error: Optimization option may invalidate only analysis options" << endl;
+                        free_memory(state);
+                        return 1;
+                    }
         }
-        if (can_done) {
-            cout << "------OPT \"" << all_functions[cur_func].name << "\" STARTS" << endl;
-            if (cur_func(state, all_functions[cur_func].need_print)) {
+    }
+
+    if (!optimization_functions.empty())
+        cout << "------BEFORE OPTIMIZATION------" << endl;
+    if (!printer_functions.empty())
+        if (call_functions(state, printer_functions, all_functions)) {
+            free_memory(state);
+            return 1;
+        }
+    if (!analysis_functions.empty())
+        if (call_functions(state, analysis_functions, all_functions)) {
+            free_memory(state);
+            return 1;
+        }
+    if (!optimization_functions.empty()) {
+        state.changed = true;
+        while (state.changed) {
+            state.changed = false;
+            for (auto fptr : optimization_functions) {
+                queue<func_ptr> funcs;
+                for (auto func : all_functions[fptr].dependences)
+                    funcs.push(func);
+                // call undone dependences
+                if (call_functions(state, funcs, all_functions, false)) {
+                    free_memory(state);
+                    return 1;
+                }
+                // call optimization
+                if (fptr(state, false)) {
+                    free_memory(state);
+                    return 1;
+                }
+                // invalidate funcs
+                funcs = {};
+                for (auto func : all_functions[fptr].invalidated) {
+                    all_functions[func].done = false;
+                    funcs.push(func);
+                }
+                while (!funcs.empty()) {
+                    func_ptr cur_func = funcs.front();
+                    funcs.pop();
+                    for (auto func : all_functions[cur_func].dependents) {
+                        all_functions[func].done = false;
+                        funcs.push(func);
+                    }
+                }
+            }
+        }
+        cout << "------AFTER OPTIMIZATION------" << endl;
+        for (auto& func : all_functions)
+            func.second.done = false;
+        if (!printer_functions.empty())
+            if (call_functions(state, printer_functions, all_functions)) {
                 free_memory(state);
                 return 1;
             }
-            cout << "------OPT \"" << all_functions[cur_func].name << "\" ENDS" << endl;
-            all_functions[cur_func].done = true;
-        } else
-            necessary_functions.push(cur_func);
+        if (!analysis_functions.empty())
+            if (call_functions(state, analysis_functions, all_functions)) {
+                free_memory(state);
+                return 1;
+            }
     }
 
     free_memory(state);
