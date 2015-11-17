@@ -9,7 +9,7 @@
 #define DEFHEAD(str)
 
 #elif defined(GENERATE_USAGE)
-" [-i INPUTFILE] [-o OUTPUTFILE] [-h] [-help] [-u] [-usage] [-dfst] [-ALL]"
+" [-i INPUTFILE] [-o OUTPUTFILE] [-h] [-help] [-u] [-usage] [-dfst] [-friendly] [-ALL]"
 #define DEF(option, opt_type, opt_help, dependences, invalidated) " [-"#option"]"
 #define DEFHEAD(str)
 
