@@ -10,8 +10,11 @@ DEF(AE, ANALYSIS, "Print available expressions for all BBs", {OPTION_SETS}, {})
 // CD does not depend on SETS - simplification for a simple invalidation
 DEF(CD, ANALYSIS, "Print dominators for all BBs", {OPTION_SETS}, {})
 DEF(NL, ANALYSIS, "Print natural loops", {OPTION_CD}, {})
+DEF(IC, ANALYSIS, "Print invariant calculations for all loops", {OPTION_RD dv OPTION_NL}, {})
+// IV depends on IC, but IC does not save results at the moment, so IC recalculated in IV
+DEF(IV, ANALYSIS, "Print induction variables for all loops", {OPTION_RD dv OPTION_NL}, {})
 DEFHEAD("Optimizations:")
 DEF(CSE, OPTIMIZATION, "Common subexpression elimination optimization", {OPTION_AE}, {OPTION_SETS})
 DEF(CP, OPTIMIZATION, "Copy propagation optimization", {OPTION_SETS}, {OPTION_SETS})
 DEF(SR, OPTIMIZATION, "Strength reduction optimization", {OPTION_RD dv OPTION_NL}, {OPTION_SETS})
-DEF(IVE, OPTIMIZATION, "Induction vars elimination optimization (not work)", {OPTION_RD dv OPTION_LV dv OPTION_NL}, {OPTION_SETS})
+DEF(IVE, OPTIMIZATION, "Induction variables elimination optimization (not work)", {OPTION_RD dv OPTION_LV dv OPTION_NL}, {OPTION_SETS})

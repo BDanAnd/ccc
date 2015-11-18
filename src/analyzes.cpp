@@ -844,7 +844,6 @@ vector<tuple<instruction*, int, int, int, int> > search_induction_vars(analysis_
         }
     }
     if (b) {
-        cout << "Ins in BB - {var -> (i, c, d)}" << endl;
         for (auto var_info : ind_vars) {
             print_instruction(state.str, get<0>(var_info), true);
             cout << " in " << BB_NAME(get<0>(var_info)->owner) <<
@@ -856,4 +855,41 @@ vector<tuple<instruction*, int, int, int, int> > search_induction_vars(analysis_
         }
     }
     return ind_vars;
+}
+
+int OPTION_IC(analysis_state& state, bool b)
+{
+    if (!b)
+        return 0;
+    map<basic_block*, string> tmp_names_for_bb;
+    set_tmp_names_for_bb(state, tmp_names_for_bb);
+    for (auto loop: state.natural_loops) {
+        cout << "Header: " << BB_NAME(loop.first) << " Loop: ";
+        for (int i = 0; i < state.bb_list.size(); ++i)
+            if (loop.second[i])
+                cout << BB_NAME(state.bb_list[i]) << " ";
+        cout << endl << "Invariant calculations:" << endl;
+        search_invariant_calculations(state, loop.second, true);
+        cout << endl;
+    }
+    return 0;
+}
+
+int OPTION_IV(analysis_state& state, bool b)
+{
+    if (!b)
+        return 0;
+    map<basic_block*, string> tmp_names_for_bb;
+    set_tmp_names_for_bb(state, tmp_names_for_bb);
+    for (auto loop: state.natural_loops) {
+        cout << "Header: " << BB_NAME(loop.first) << " Loop: ";
+        for (int i = 0; i < state.bb_list.size(); ++i)
+            if (loop.second[i])
+                cout << BB_NAME(state.bb_list[i]) << " ";
+        cout << endl << "Induction variables:" << endl;
+        search_induction_vars(state, loop.second,
+                              search_invariant_calculations(state, loop.second, false), true);
+        cout << endl;
+    }
+    return 0;
 }
